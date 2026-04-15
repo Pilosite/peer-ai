@@ -6,14 +6,14 @@
  * with a target matrix picked by the user (which AIs each source can call).
  *
  * Usage:
- *   npx peer-ai@latest              # interactive, user-level
- *   npx peer-ai@latest --local      # interactive, project-level
- *   npx peer-ai@latest --global     # interactive, user-level (explicit)
- *   npx peer-ai@latest --all        # install everywhere auto-detected
- *   npx peer-ai@latest --claude --codex
- *   npx peer-ai@latest --uninstall
- *   npx peer-ai@latest --version
- *   npx peer-ai@latest --help
+ *   npx @pilosite/peer-ai@latest              # interactive, user-level
+ *   npx @pilosite/peer-ai@latest --local      # interactive, project-level
+ *   npx @pilosite/peer-ai@latest --global     # interactive, user-level (explicit)
+ *   npx @pilosite/peer-ai@latest --all        # install everywhere auto-detected
+ *   npx @pilosite/peer-ai@latest --claude --codex
+ *   npx @pilosite/peer-ai@latest --uninstall
+ *   npx @pilosite/peer-ai@latest --version
+ *   npx @pilosite/peer-ai@latest --help
  *
  * Zero runtime dependencies — uses only Node core (fs, path, os, readline, child_process).
  */
@@ -649,7 +649,7 @@ installed AI can ask any other installed AI for a second opinion, code review,
 or deep analysis.
 
 ${bold}USAGE${reset}
-  npx peer-ai@latest [OPTIONS]
+  npx @pilosite/peer-ai@latest [OPTIONS]
 
 ${bold}SCOPE${reset}
   -g, --global      Install under your home directory (~/.claude, ~/.codex, ...)
@@ -673,11 +673,11 @@ ${bold}OTHER${reset}
   -h, --help        Print this help
 
 ${bold}EXAMPLES${reset}
-  npx peer-ai@latest                      # interactive install, user-level
-  npx peer-ai@latest --all --yes          # install everywhere, no prompts
-  npx peer-ai@latest --local --claude     # Claude Code only, project-level
-  npx peer-ai@latest --uninstall          # remove from user-level
-  npx peer-ai@latest --uninstall --local  # remove from project
+  npx @pilosite/peer-ai@latest                      # interactive install, user-level
+  npx @pilosite/peer-ai@latest --all --yes          # install everywhere, no prompts
+  npx @pilosite/peer-ai@latest --local --claude     # Claude Code only, project-level
+  npx @pilosite/peer-ai@latest --uninstall          # remove from user-level
+  npx @pilosite/peer-ai@latest --uninstall --local  # remove from project
 
 ${bold}DOCS${reset}
   https://github.com/Pilosite/peer-ai

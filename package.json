@@ -1,5 +1,5 @@
 {
-  "name": "peer-ai",
+  "name": "@pilosite/peer-ai",
   "version": "0.1.0",
   "description": "AI-to-AI peer consultation — install symmetric skills in Claude Code, Codex CLI, and Gemini CLI so any AI can ask any other AI for a second opinion, code review, or deep analysis.",
   "bin": {

@@ -2,9 +2,9 @@
 
 > **AI-to-AI peer consultation.** Let Claude Code, Codex CLI, and Gemini CLI ask each other for a second opinion, code review, or deep analysis — with one command.
 
-[![npm version](https://img.shields.io/npm/v/peer-ai.svg)](https://www.npmjs.com/package/peer-ai)
-[![license](https://img.shields.io/npm/l/peer-ai.svg)](LICENSE)
-[![node](https://img.shields.io/node/v/peer-ai.svg)](https://nodejs.org)
+[![npm version](https://img.shields.io/npm/v/@pilosite/peer-ai.svg)](https://www.npmjs.com/package/@pilosite/peer-ai)
+[![license](https://img.shields.io/npm/l/@pilosite/peer-ai.svg)](LICENSE)
+[![node](https://img.shields.io/node/v/@pilosite/peer-ai.svg)](https://nodejs.org)
 
 ---
 
@@ -34,39 +34,39 @@ peer-ai is a **Node zero-dependency installer** that scaffolds one skill file pe
 | **Codex CLI**  | `~/.codex/skills/peer-ai/SKILL.md` (auto-discovered)| "ask claude", "second opinion" |
 | **Gemini CLI** | `~/.gemini/extensions/peer-ai/` (extension)         | `/peer-ai:<target> ...` |
 
-The installer is **dynamic** — only the targets you select appear in the rendered skills. Install Claude Code + Codex only? Neither skill will mention Gemini. Add Gemini later? Re-run `npx peer-ai@latest` and it updates in place.
+The installer is **dynamic** — only the targets you select appear in the rendered skills. Install Claude Code + Codex only? Neither skill will mention Gemini. Add Gemini later? Re-run `npx @pilosite/peer-ai@latest` and it updates in place.
 
 ## Quick start
 
 ```bash
 # Interactive install — the installer detects which AIs you have,
 # asks which should be sources, and picks targets per source.
-npx peer-ai@latest
+npx @pilosite/peer-ai@latest
 ```
 
 Non-interactive, install everywhere detected:
 
 ```bash
-npx peer-ai@latest --all --yes
+npx @pilosite/peer-ai@latest --all --yes
 ```
 
 Project-local install instead of user-level:
 
 ```bash
-npx peer-ai@latest --local
+npx @pilosite/peer-ai@latest --local
 ```
 
 Uninstall (strips both skills and the CLAUDE.md / AGENTS.md / GEMINI.md blocks):
 
 ```bash
-npx peer-ai@latest --uninstall
+npx @pilosite/peer-ai@latest --uninstall
 ```
 
 ## How it works
 
 ### Installation
 
-When you run `npx peer-ai@latest`:
+When you run `npx @pilosite/peer-ai@latest`:
 
 1. **Detect.** `which claude`, `which codex`, `which gemini` — list what's on the machine.
 2. **Scope.** User-level (`~/.claude/...`) or project-level (`./.claude/...`)? Interactive unless `--global` / `--local`.
@@ -107,7 +107,7 @@ These aren't nice-to-haves — they're baked into every skill template so the so
 ### Solo dev with all 3 CLIs
 
 ```bash
-npx peer-ai@latest --all --yes
+npx @pilosite/peer-ai@latest --all --yes
 ```
 
 Every source can call every target. You'll see the skill appear in all 3 CLIs after restart.
@@ -116,7 +116,7 @@ Every source can call every target. You'll see the skill appear in all 3 CLIs af
 
 ```bash
 cd my-project
-npx peer-ai@latest --local --all
+npx @pilosite/peer-ai@latest --local --all
 git add .claude .codex .gemini CLAUDE.md AGENTS.md GEMINI.md
 git commit -m "chore: add peer-ai for cross-model code review"
 ```
@@ -126,7 +126,7 @@ Teammates get peer-ai activated automatically on `git pull` in their respective 
 ### Only Claude Code installed, curious about adding Codex later
 
 ```bash
-npx peer-ai@latest --claude --yes
+npx @pilosite/peer-ai@latest --claude --yes
 ```
 
 Only Claude Code gets the skill, with no targets (just `/peer-ai:list` to check what's installable). When you add Codex later, re-run with `--all` and it updates in place.
@@ -134,7 +134,7 @@ Only Claude Code gets the skill, with no targets (just `/peer-ai:list` to check 
 ### CI / scripted install
 
 ```bash
-npx peer-ai@latest --all --global --yes --instructions
+npx @pilosite/peer-ai@latest --all --global --yes --instructions
 ```
 
 Non-interactive, everywhere, instructions blocks auto-added. Suitable for dotfiles bootstrap or container images.
@@ -142,8 +142,8 @@ Non-interactive, everywhere, instructions blocks auto-added. Suitable for dotfil
 ### Uninstall fully
 
 ```bash
-npx peer-ai@latest --uninstall            # user-level
-npx peer-ai@latest --uninstall --local    # project-level
+npx @pilosite/peer-ai@latest --uninstall            # user-level
+npx @pilosite/peer-ai@latest --uninstall --local    # project-level
 ```
 
 Removes skills **and** the peer-ai block in CLAUDE.md / AGENTS.md / GEMINI.md. Other content in those files is preserved.
@@ -210,7 +210,7 @@ If your target CLIs work offline (local models via Ollama, for example), peer-ai
 ### How do I update to a newer version?
 
 ```bash
-npx peer-ai@latest   # always pulls the latest
+npx @pilosite/peer-ai@latest   # always pulls the latest
 ```
 
 The installer is idempotent — re-running updates the skills in place with the latest templates. If you pinned to a specific version, pass `peer-ai@0.2.0` instead of `@latest`.

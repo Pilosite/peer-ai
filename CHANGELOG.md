@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## [0.1.0] — Initial release
 
 ### Added
-- Zero-dependency Node installer (`npx peer-ai@latest`) supporting:
+- Zero-dependency Node installer (`npx @pilosite/peer-ai@latest`) supporting:
   - Interactive install with CLI auto-detection
   - `--global` (user-level, default) and `--local` (project-level) scopes
   - Per-source target matrix selection
