@@ -1,0 +1,35 @@
+<!-- peer-ai Configuration — managed by peer-ai installer v{{version}} -->
+## peer-ai — AI-to-AI peer consultation
+
+This repository has the **peer-ai** skill installed. You can consult another installed AI CLI ({{targets_list}}) for a second opinion, code review, or deep analysis.
+
+**When to use peer-ai:**
+- User explicitly asks for a peer review ("check with codex", "ask claude", "demande à gemini")
+- You want independent validation from a different model family on a tricky call
+- Heavy analysis that would blow your own context budget — delegate to a fresh CLI session
+
+**When NOT to use:**
+- User wants an answer from you — don't delegate reflexively
+- Simple factual lookups — faster to do yourself
+- Tasks the user wants DONE, not reviewed — delegation ≠ execution
+
+**How to invoke** (source-dependent):
+{{#if_target claude}}
+- From Claude Code: `/peer-ai claude <question>` (if installed here) — typically to spawn a fresh Claude session as a second opinion
+{{/if_target}}
+{{#if_target codex}}
+- To consult Codex: `/peer-ai codex <question>` (Claude Code) or call `codex exec --sandbox read-only` directly
+{{/if_target}}
+{{#if_target gemini}}
+- To consult Gemini: `/peer-ai gemini <question>` (Claude Code) or `/peer-ai:gemini <question>` (Gemini CLI) or call `gemini < brief.md` directly
+{{/if_target}}
+
+**Guardrails (non-negotiable):**
+- Max 5 peer consultations per target per session — prevents infinite AI-to-AI loops
+- Always use `--sandbox read-only` when invoking Codex as a peer
+- Never paraphrase the peer's response — relay verbatim under a clear heading
+- Scrub secrets (env vars, API keys, tokens) before sending briefs to peers
+- Never delegate understanding — the peer reviews, you synthesize and decide
+
+Learn more or uninstall: https://github.com/Pilosite/peer-ai
+<!-- /peer-ai Configuration -->

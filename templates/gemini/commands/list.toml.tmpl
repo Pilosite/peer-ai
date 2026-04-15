@@ -1,0 +1,29 @@
+description = "List which AI CLIs are installed and available for /peer-ai consultation"
+prompt = """
+Check which AI CLIs are installed on this machine and present a table to the user.
+
+# Detection
+
+{{#if_target codex}}
+Codex:  !{which codex 2>/dev/null || echo "(not installed)"}
+{{/if_target}}
+{{#if_target claude}}
+Claude: !{which claude 2>/dev/null || echo "(not installed)"}
+{{/if_target}}
+
+# Present
+
+Show the user a short table:
+{{#each_target}}
+  - {{target_label}}: <path or "not installed">
+{{/each_target}}
+
+Then remind them of usage:
+{{#each_target}}
+  /peer-ai:{{target_key}} <question>   — ask {{target_label}}
+{{/each_target}}
+
+If ALL peer CLIs are missing, suggest they install at least one before consulting. If Gemini is the only AI available, note that `/peer-ai` is most useful when there's a peer to consult with.
+
+Configured at install time by peer-ai v{{version}}.
+"""

@@ -1,0 +1,40 @@
+{
+  "name": "peer-ai",
+  "version": "0.1.0",
+  "description": "AI-to-AI peer consultation — install symmetric skills in Claude Code, Codex CLI, and Gemini CLI so any AI can ask any other AI for a second opinion, code review, or deep analysis.",
+  "bin": {
+    "peer-ai": "bin/install.js"
+  },
+  "files": [
+    "bin",
+    "templates",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "ai",
+    "claude",
+    "claude-code",
+    "codex",
+    "codex-cli",
+    "gemini",
+    "gemini-cli",
+    "peer-review",
+    "skills",
+    "ai-consultation",
+    "cross-model"
+  ],
+  "author": "",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Pilosite/peer-ai.git"
+  },
+  "homepage": "https://github.com/Pilosite/peer-ai",
+  "bugs": {
+    "url": "https://github.com/Pilosite/peer-ai/issues"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
