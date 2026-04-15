@@ -3,19 +3,25 @@
  * peer-ai installer
  *
  * Installs the peer-ai skill in Claude Code, Codex CLI, and/or Gemini CLI
- * with a target matrix picked by the user (which AIs each source can call).
+ * with a target matrix picked by the user, a shared guard script for hard
+ * enforcement of the per-session consultation cap, and optional updates to
+ * each CLI's instructions file (CLAUDE.md / AGENTS.md / GEMINI.md).
  *
  * Usage:
- *   npx @pilosite/peer-ai@latest              # interactive, user-level
- *   npx @pilosite/peer-ai@latest --local      # interactive, project-level
- *   npx @pilosite/peer-ai@latest --global     # interactive, user-level (explicit)
- *   npx @pilosite/peer-ai@latest --all        # install everywhere auto-detected
- *   npx @pilosite/peer-ai@latest --claude --codex
- *   npx @pilosite/peer-ai@latest --uninstall
- *   npx @pilosite/peer-ai@latest --version
- *   npx @pilosite/peer-ai@latest --help
+ *   npx @pilosite/peer-ai@latest                       # interactive install
+ *   npx @pilosite/peer-ai@latest --local               # project-level install
+ *   npx @pilosite/peer-ai@latest --global              # user-level install (default)
+ *   npx @pilosite/peer-ai@latest --all                 # install everywhere detected
+ *   npx @pilosite/peer-ai@latest --max-rounds 10       # raise the per-session cap
+ *   npx @pilosite/peer-ai@latest --no-hooks            # soft cap only, no hard block
+ *   npx @pilosite/peer-ai@latest --uninstall           # remove peer-ai
+ *   npx @pilosite/peer-ai@latest config get            # print current config
+ *   npx @pilosite/peer-ai@latest config set max_rounds 10
+ *   npx @pilosite/peer-ai@latest reset                 # wipe the round counter
+ *   npx @pilosite/peer-ai@latest reset codex           # wipe codex only
+ *   npx @pilosite/peer-ai@latest status                # show current round usage
  *
- * Zero runtime dependencies — uses only Node core (fs, path, os, readline, child_process).
+ * Zero runtime dependencies — Node core only.
  */
 
 const fs = require('fs');
@@ -35,29 +41,40 @@ const reset = '\x1b[0m';
 
 const pkg = require('../package.json');
 
+// -------- peer-ai state paths (shared with guard.js) --------
+const PEER_AI_DIR = path.join(os.homedir(), '.peer-ai');
+const PEER_AI_CONFIG = path.join(PEER_AI_DIR, 'config.json');
+const PEER_AI_ROUNDS = path.join(PEER_AI_DIR, 'rounds.json');
+const PEER_AI_GUARD = path.join(PEER_AI_DIR, 'guard.js');
+
+const DEFAULT_CONFIG = {
+  max_rounds: 5,
+  ttl_minutes: 60,
+  hard_block: true,
+};
+
 // -------- Supported AIs --------
-// Each AI is both a potential "source" (the one that has the skill installed and
-// can initiate a consultation) and a potential "target" (the one being consulted).
-// A source can only call targets that are actually installed on the machine.
 const AIS = {
   claude: {
     label: 'Claude Code',
     binary: 'claude',
     detect: () => which('claude'),
-    // Global = user-level install under ~/.claude/commands/
-    // Local  = project-level install under ./.claude/commands/
     installPath: (scope, cwd) =>
       scope === 'local'
         ? path.join(cwd, '.claude', 'commands', 'peer-ai.md')
         : path.join(os.homedir(), '.claude', 'commands', 'peer-ai.md'),
-    // Instructions file the model reads on every session. We append a
-    // peer-ai block here so the model knows the skill exists.
     instructionsPath: (scope, cwd) =>
       scope === 'local'
         ? path.join(cwd, 'CLAUDE.md')
         : path.join(os.homedir(), '.claude', 'CLAUDE.md'),
+    hookSettingsPath: (scope, cwd) =>
+      scope === 'local'
+        ? path.join(cwd, '.claude', 'settings.json')
+        : path.join(os.homedir(), '.claude', 'settings.json'),
     templateDir: 'claude',
     writer: writeClaudeSkill,
+    hookWriter: writeClaudeHook,
+    hookRemover: removeClaudeHook,
   },
   codex: {
     label: 'Codex CLI (OpenAI)',
@@ -71,8 +88,18 @@ const AIS = {
       scope === 'local'
         ? path.join(cwd, 'AGENTS.md')
         : path.join(os.homedir(), '.codex', 'AGENTS.md'),
+    hookSettingsPath: (scope, cwd) =>
+      scope === 'local'
+        ? path.join(cwd, '.codex', 'hooks.json')
+        : path.join(os.homedir(), '.codex', 'hooks.json'),
+    codexConfigPath: (scope, cwd) =>
+      scope === 'local'
+        ? path.join(cwd, '.codex', 'config.toml')
+        : path.join(os.homedir(), '.codex', 'config.toml'),
     templateDir: 'codex',
     writer: writeCodexSkill,
+    hookWriter: writeCodexHook,
+    hookRemover: removeCodexHook,
   },
   gemini: {
     label: 'Gemini CLI (Google)',
@@ -86,31 +113,51 @@ const AIS = {
       scope === 'local'
         ? path.join(cwd, 'GEMINI.md')
         : path.join(os.homedir(), '.gemini', 'GEMINI.md'),
+    hookSettingsPath: (scope, cwd) =>
+      scope === 'local'
+        ? path.join(cwd, '.gemini', 'settings.json')
+        : path.join(os.homedir(), '.gemini', 'settings.json'),
     templateDir: 'gemini',
     writer: writeGeminiExtension,
+    hookWriter: writeGeminiHook,
+    hookRemover: removeGeminiHook,
   },
 };
 
-// Instructions block markers — used to detect, update, or remove the peer-ai
-// section inside CLAUDE.md / AGENTS.md / GEMINI.md. Keep these in sync with
-// templates/instructions-block.md.tmpl.
+// Instructions block markers
 const INSTRUCTIONS_OPEN_MARKER = '<!-- peer-ai Configuration — managed by peer-ai installer';
 const INSTRUCTIONS_CLOSE_MARKER = '<!-- /peer-ai Configuration -->';
 
+// Hook signature — stable marker so we can detect and cleanly remove our hook
+// entries without touching other hooks a user may have configured.
+const HOOK_MARKER_COMMAND_SUFFIX = '.peer-ai/guard.js';
+
 // -------- Args parsing --------
-const args = process.argv.slice(2);
-const hasGlobal = args.includes('--global') || args.includes('-g');
-const hasLocal = args.includes('--local') || args.includes('-l');
-const hasAll = args.includes('--all');
-const hasUninstall = args.includes('--uninstall') || args.includes('-u');
-const hasVersion = args.includes('--version') || args.includes('-v');
-const hasHelp = args.includes('--help') || args.includes('-h');
-const hasYes = args.includes('--yes') || args.includes('-y');
-const hasClaude = args.includes('--claude');
-const hasCodex = args.includes('--codex');
-const hasGemini = args.includes('--gemini');
-const hasNoInstructions = args.includes('--no-instructions');
-const hasInstructions = args.includes('--instructions');
+const argv = process.argv.slice(2);
+const args = argv.filter((a) => !a.startsWith('-') || a === '-g' || a === '-l' || a === '-u' || a === '-v' || a === '-h' || a === '-y');
+
+// Detect subcommand (first positional arg that isn't a flag, excluding our short flags)
+const positional = argv.filter((a) => !a.startsWith('-'));
+const subcommand = positional[0] && ['config', 'reset', 'status'].includes(positional[0]) ? positional[0] : null;
+
+const hasGlobal = argv.includes('--global') || argv.includes('-g');
+const hasLocal = argv.includes('--local') || argv.includes('-l');
+const hasAll = argv.includes('--all');
+const hasUninstall = argv.includes('--uninstall') || argv.includes('-u');
+const hasVersion = argv.includes('--version') || argv.includes('-v');
+const hasHelp = argv.includes('--help') || argv.includes('-h');
+const hasYes = argv.includes('--yes') || argv.includes('-y');
+const hasClaude = argv.includes('--claude');
+const hasCodex = argv.includes('--codex');
+const hasGemini = argv.includes('--gemini');
+const hasNoInstructions = argv.includes('--no-instructions');
+const hasInstructions = argv.includes('--instructions');
+const hasNoHooks = argv.includes('--no-hooks');
+const hasHooks = argv.includes('--hooks');
+
+// --max-rounds N (value is the next argv item)
+const maxRoundsIdx = argv.indexOf('--max-rounds');
+const cliMaxRounds = maxRoundsIdx >= 0 ? parseInt(argv[maxRoundsIdx + 1] || '', 10) : null;
 
 // -------- Main --------
 (async () => {
@@ -121,6 +168,20 @@ const hasInstructions = args.includes('--instructions');
 
   if (hasHelp) {
     printHelp();
+    process.exit(0);
+  }
+
+  // Subcommands have their own flow — no install banner
+  if (subcommand === 'config') {
+    await runConfig(positional.slice(1));
+    process.exit(0);
+  }
+  if (subcommand === 'reset') {
+    await runReset(positional.slice(1));
+    process.exit(0);
+  }
+  if (subcommand === 'status') {
+    await runStatus();
     process.exit(0);
   }
 
@@ -148,7 +209,6 @@ async function runInstall() {
     detected[key] = ai.detect();
   }
   const installedList = Object.keys(detected).filter((k) => detected[k]);
-  const missingList = Object.keys(detected).filter((k) => !detected[k]);
 
   console.log(`${bold}Detected AI CLIs on this machine:${reset}`);
   for (const key of Object.keys(AIS)) {
@@ -202,8 +262,7 @@ async function runInstall() {
     process.exit(0);
   }
 
-  // Step 4: For each source, determine targets (which AIs it can call)
-  // Default: each source can call every *other* installed AI
+  // Step 4: For each source, determine targets
   const sourceTargets = {};
   for (const src of sources) {
     const candidates = installedList.filter((k) => k !== src);
@@ -214,20 +273,52 @@ async function runInstall() {
     }
   }
 
-  // Step 5: Preview plan
+  // Step 5: Determine max_rounds (config value that will be written to ~/.peer-ai/config.json)
+  let maxRounds;
+  if (cliMaxRounds && cliMaxRounds > 0) {
+    maxRounds = cliMaxRounds;
+  } else if (hasYes || hasAll) {
+    maxRounds = DEFAULT_CONFIG.max_rounds;
+  } else {
+    maxRounds = await askMaxRounds();
+  }
+
+  // Step 6: Determine whether to install hooks (hard-block) or stay soft-only
+  let installHooks;
+  if (hasNoHooks) {
+    installHooks = false;
+  } else if (hasHooks || hasYes || hasAll) {
+    installHooks = true;
+  } else {
+    console.log();
+    console.log(`${bold}Enable hard-block hooks?${reset}`);
+    console.log(`Hooks install a shared guard script in each CLI that hard-blocks`);
+    console.log(`peer-ai calls once the per-session cap is reached. Without hooks,`);
+    console.log(`the cap is enforced only by a soft instruction inside each skill.`);
+    installHooks = await askYesNo('Install hard-block hooks?', true);
+  }
+
+  // Step 7: Preview plan
+  console.log();
   console.log(`${bold}Install plan:${reset}`);
+  console.log(`  ${dim}max_rounds:${reset} ${maxRounds} per target per session`);
+  console.log(`  ${dim}hard block:${reset} ${installHooks ? 'yes (hooks)' : 'no (soft cap only)'}`);
+  console.log();
   for (const src of sources) {
     const ai = AIS[src];
     const tgts = sourceTargets[src];
     const tgtLabels = tgts.length > 0 ? tgts.map((t) => AIS[t].label).join(', ') : `${dim}(no targets — will only expose /list)${reset}`;
     const installPath = ai.installPath(scope, cwd);
     console.log(`  ${cyan}${ai.label}${reset}`);
-    console.log(`    path:    ${dim}${installPath}${reset}`);
+    console.log(`    skill:   ${dim}${installPath}${reset}`);
     console.log(`    targets: ${tgtLabels}`);
+    if (installHooks) {
+      console.log(`    hook:    ${dim}${ai.hookSettingsPath(scope, cwd)}${reset}`);
+    }
   }
   console.log();
 
-  // Step 6: Confirm
+  // Step 8: Confirm
   if (!hasYes && !hasAll) {
     const confirmed = await askYesNo('Proceed with install?', true);
     if (!confirmed) {
@@ -236,14 +327,14 @@ async function runInstall() {
     }
   }
 
-  // Step 7: Write files
+  // Step 9: Write skill files
   let successCount = 0;
   for (const src of sources) {
     const ai = AIS[src];
     const tgts = sourceTargets[src];
     try {
       const installPath = ai.installPath(scope, cwd);
-      ai.writer({ installPath, targets: tgts, version: pkg.version });
+      ai.writer({ installPath, targets: tgts, version: pkg.version, maxRounds });
       console.log(`${green}✓${reset} Installed ${ai.label} skill -> ${dim}${installPath}${reset}`);
       successCount++;
     } catch (err) {
@@ -251,8 +342,45 @@ async function runInstall() {
     }
   }
 
-  // Step 8: Optionally update instructions files (CLAUDE.md / AGENTS.md / GEMINI.md)
-  // so the model knows the skill exists and when to use it. This is opt-in.
+  // Step 10: Install hooks + guard script + config file
+  if (installHooks) {
+    console.log();
+    try {
+      writePeerAiConfig({ max_rounds: maxRounds });
+      copyGuardScript();
+      console.log(`${green}✓${reset} Installed guard + config at ${dim}${PEER_AI_DIR}${reset}`);
+    } catch (err) {
+      console.error(`${red}✗${reset} Failed to install guard/config: ${err.message}`);
+    }
+
+    for (const src of sources) {
+      const ai = AIS[src];
+      try {
+        const result = ai.hookWriter({ scope, cwd });
+        if (result === 'needs_codex_flag') {
+          console.log(`${yellow}⚠${reset} Codex hook installed, but requires feature flag to take effect:`);
+          console.log(`    ${dim}Add \`codex_hooks = true\` under [features] in ~/.codex/config.toml${reset}`);
+          const shouldFlip = (hasYes || hasAll) ? true : await askYesNo('  Enable codex_hooks = true now?', true);
+          if (shouldFlip) {
+            enableCodexHooksFlag(scope, cwd);
+            console.log(`${green}  ✓${reset} Enabled codex_hooks feature flag`);
+          } else {
+            console.log(`${dim}  → Remember to enable it later, or hooks will have no effect.${reset}`);
+          }
+        } else if (result === 'gemini_warning') {
+          console.log(`${green}✓${reset} Installed ${ai.label} hook -> ${dim}${ai.hookSettingsPath(scope, cwd)}${reset}`);
+          console.log(`${dim}  First invocation may show a Gemini security fingerprint warning — this is${reset}`);
+          console.log(`${dim}  expected. Accept it to authorize peer-ai's guard script.${reset}`);
+        } else {
+          console.log(`${green}✓${reset} Installed ${ai.label} hook -> ${dim}${ai.hookSettingsPath(scope, cwd)}${reset}`);
+        }
+      } catch (err) {
+        console.error(`${yellow}⚠${reset} Could not install ${ai.label} hook: ${err.message}`);
+      }
+    }
+  }
+
+  // Step 11: Optionally update instructions files
   let shouldUpdateInstructions;
   if (hasNoInstructions) {
     shouldUpdateInstructions = false;
@@ -282,6 +410,7 @@ async function runInstall() {
           filePath: instructionsPath,
           targets: tgts,
           version: pkg.version,
+          maxRounds,
         });
         if (result === 'created') {
           console.log(`${green}✓${reset} Created ${dim}${instructionsPath}${reset}`);
@@ -300,7 +429,7 @@ async function runInstall() {
   if (successCount === sources.length) {
     console.log(`${green}${bold}✓ peer-ai installed successfully (${successCount} source${successCount > 1 ? 's' : ''})${reset}`);
     console.log();
-    printUsageHint(sources);
+    printUsageHint(sources, maxRounds);
   } else {
     console.log(`${yellow}⚠ Partial install: ${successCount}/${sources.length} sources${reset}`);
     process.exit(2);
@@ -316,7 +445,10 @@ async function runUninstall() {
 
   let removed = 0;
   let blocksRemoved = 0;
+  let hooksRemoved = 0;
+
   for (const [key, ai] of Object.entries(AIS)) {
+    // Remove skill
     const installPath = ai.installPath(scope, cwd);
     if (fs.existsSync(installPath)) {
       try {
@@ -324,7 +456,6 @@ async function runUninstall() {
           fs.rmSync(installPath, { recursive: true, force: true });
         } else {
           fs.unlinkSync(installPath);
-          // Also remove parent dir if it's a peer-ai-specific dir and empty
           const parent = path.dirname(installPath);
           if (path.basename(parent) === 'peer-ai') {
             try { fs.rmdirSync(parent); } catch {}
@@ -333,12 +464,11 @@ async function runUninstall() {
         console.log(`${green}✓${reset} Removed ${ai.label} skill: ${dim}${installPath}${reset}`);
         removed++;
       } catch (err) {
-        console.error(`${red}✗${reset} Failed to remove ${ai.label}: ${err.message}`);
+        console.error(`${red}✗${reset} Failed to remove ${ai.label} skill: ${err.message}`);
       }
     }
 
-    // Also strip the peer-ai block from the instructions file, if present.
-    // Opt-out via --no-instructions, same as install.
+    // Remove instructions block
     if (!hasNoInstructions) {
       const instructionsPath = ai.instructionsPath(scope, cwd);
       if (fs.existsSync(instructionsPath)) {
@@ -353,32 +483,216 @@ async function runUninstall() {
         }
       }
     }
+
+    // Remove hook entry
+    try {
+      const removedHook = ai.hookRemover({ scope, cwd });
+      if (removedHook) {
+        console.log(`${green}✓${reset} Removed ${ai.label} hook: ${dim}${ai.hookSettingsPath(scope, cwd)}${reset}`);
+        hooksRemoved++;
+      }
+    } catch (err) {
+      console.error(`${yellow}⚠${reset} Could not strip hook from ${ai.label}: ${err.message}`);
+    }
   }
 
-  if (removed === 0 && blocksRemoved === 0) {
+  // Remove ~/.peer-ai/ directory entirely at global scope
+  if (scope === 'global' && fs.existsSync(PEER_AI_DIR)) {
+    try {
+      fs.rmSync(PEER_AI_DIR, { recursive: true, force: true });
+      console.log(`${green}✓${reset} Removed ${dim}${PEER_AI_DIR}${reset}`);
+    } catch (err) {
+      console.error(`${yellow}⚠${reset} Could not remove ${PEER_AI_DIR}: ${err.message}`);
+    }
+  }
+
+  const total = removed + blocksRemoved + hooksRemoved;
+  if (total === 0) {
     console.log(`${dim}Nothing to remove at ${scope} scope.${reset}`);
   } else {
     const parts = [];
     if (removed > 0) parts.push(`${removed} skill${removed > 1 ? 's' : ''}`);
     if (blocksRemoved > 0) parts.push(`${blocksRemoved} instructions block${blocksRemoved > 1 ? 's' : ''}`);
+    if (hooksRemoved > 0) parts.push(`${hooksRemoved} hook${hooksRemoved > 1 ? 's' : ''}`);
     console.log(`\n${green}✓ Uninstalled peer-ai (${parts.join(', ')}).${reset}`);
   }
 }
 
-// -------- Instructions file helpers --------
+// -------- Subcommand: config --------
+async function runConfig(subArgs) {
+  const action = subArgs[0] || 'get';
 
-/**
- * Add or update the peer-ai block in an instructions file (CLAUDE.md / AGENTS.md / GEMINI.md).
- * Returns: 'created' | 'added' | 'updated' | 'unchanged'.
- *
- * Behavior:
- *   - File doesn't exist → create it with just the block
- *   - File exists, no block → append the block with a blank line separator
- *   - File exists, block present → replace the block in place (idempotent)
- */
-function updateInstructions({ filePath, targets, version }) {
+  if (action === 'get') {
+    const key = subArgs[1];
+    const config = loadPeerAiConfig();
+    if (key) {
+      if (key in config) {
+        console.log(config[key]);
+      } else {
+        console.error(`${red}Unknown config key: ${key}${reset}`);
+        console.error(`Valid keys: ${Object.keys(DEFAULT_CONFIG).join(', ')}`);
+        process.exit(1);
+      }
+    } else {
+      console.log(`${bold}peer-ai config${reset} ${dim}(${PEER_AI_CONFIG})${reset}`);
+      for (const [k, v] of Object.entries(config)) {
+        console.log(`  ${k}: ${v}`);
+      }
+    }
+    return;
+  }
+
+  if (action === 'set') {
+    const key = subArgs[1];
+    const rawValue = subArgs[2];
+    if (!key || rawValue === undefined) {
+      console.error(`${red}Usage: peer-ai config set <key> <value>${reset}`);
+      process.exit(1);
+    }
+    if (!(key in DEFAULT_CONFIG)) {
+      console.error(`${red}Unknown config key: ${key}${reset}`);
+      console.error(`Valid keys: ${Object.keys(DEFAULT_CONFIG).join(', ')}`);
+      process.exit(1);
+    }
+    const config = loadPeerAiConfig();
+    // Coerce value to the same type as the default
+    const defaultVal = DEFAULT_CONFIG[key];
+    let value;
+    if (typeof defaultVal === 'number') {
+      value = parseInt(rawValue, 10);
+      if (isNaN(value) || value < 0) {
+        console.error(`${red}Invalid number: ${rawValue}${reset}`);
+        process.exit(1);
+      }
+    } else if (typeof defaultVal === 'boolean') {
+      value = rawValue === 'true' || rawValue === '1' || rawValue === 'yes';
+    } else {
+      value = rawValue;
+    }
+    config[key] = value;
+    writePeerAiConfig(config);
+    console.log(`${green}✓${reset} Set ${bold}${key}${reset} = ${value}`);
+    return;
+  }
+
+  if (action === 'reset') {
+    writePeerAiConfig({ ...DEFAULT_CONFIG });
+    console.log(`${green}✓${reset} Reset config to defaults`);
+    for (const [k, v] of Object.entries(DEFAULT_CONFIG)) {
+      console.log(`  ${k}: ${v}`);
+    }
+    return;
+  }
+
+  console.error(`${red}Unknown config action: ${action}${reset}`);
+  console.error(`Usage: peer-ai config [get|set|reset] [key] [value]`);
+  process.exit(1);
+}
+
+// -------- Subcommand: reset --------
+async function runReset(subArgs) {
+  const target = subArgs[0];
+
+  if (!fs.existsSync(PEER_AI_ROUNDS)) {
+    console.log(`${dim}No round counter to reset.${reset}`);
+    return;
+  }
+
+  if (target) {
+    const rounds = loadRounds();
+    if (!(target in (rounds.rounds || {}))) {
+      console.log(`${dim}No counter entry for "${target}". Nothing to reset.${reset}`);
+      return;
+    }
+    delete rounds.rounds[target];
+    rounds.last_activity = new Date().toISOString();
+    writeRounds(rounds);
+    console.log(`${green}✓${reset} Reset round counter for ${bold}${target}${reset}`);
+  } else {
+    writeRounds({ last_activity: new Date().toISOString(), rounds: {} });
+    console.log(`${green}✓${reset} Reset all round counters`);
+  }
+}
+
+// -------- Subcommand: status --------
+async function runStatus() {
+  const config = loadPeerAiConfig();
+  const rounds = fs.existsSync(PEER_AI_ROUNDS) ? loadRounds() : { rounds: {}, last_activity: null };
+
+  console.log(`${bold}peer-ai status${reset}`);
+  console.log();
+  console.log(`${dim}config:${reset}`);
+  console.log(`  max_rounds:  ${config.max_rounds}${process.env.PEER_AI_MAX_ROUNDS ? ` ${yellow}(overridden by PEER_AI_MAX_ROUNDS=${process.env.PEER_AI_MAX_ROUNDS})${reset}` : ''}`);
+  console.log(`  ttl_minutes: ${config.ttl_minutes}`);
+  console.log(`  hard_block:  ${config.hard_block}`);
+  console.log();
+  console.log(`${dim}rounds:${reset}`);
+  const effectiveMax = parseInt(process.env.PEER_AI_MAX_ROUNDS || '', 10) || config.max_rounds;
+  const targets = ['claude', 'codex', 'gemini'];
+  for (const t of targets) {
+    const used = rounds.rounds[t] || 0;
+    const bar = used >= effectiveMax ? `${red}BLOCKED${reset}` : used > 0 ? `${yellow}${used}/${effectiveMax}${reset}` : `${dim}${used}/${effectiveMax}${reset}`;
+    console.log(`  ${t.padEnd(8)} ${bar}`);
+  }
+  if (rounds.last_activity) {
+    const age = Math.round((Date.now() - new Date(rounds.last_activity).getTime()) / 60000);
+    console.log();
+    console.log(`${dim}last activity: ${age} minute${age !== 1 ? 's' : ''} ago${reset}`);
+    const remaining = config.ttl_minutes - age;
+    if (remaining > 0) {
+      console.log(`${dim}auto-reset in: ${remaining} minute${remaining !== 1 ? 's' : ''}${reset}`);
+    } else {
+      console.log(`${dim}TTL expired — next guard call will auto-reset.${reset}`);
+    }
+  }
+}
+
+// -------- peer-ai config/rounds helpers --------
+function loadPeerAiConfig() {
+  if (!fs.existsSync(PEER_AI_CONFIG)) {
+    return { ...DEFAULT_CONFIG };
+  }
+  try {
+    return { ...DEFAULT_CONFIG, ...JSON.parse(fs.readFileSync(PEER_AI_CONFIG, 'utf8')) };
+  } catch {
+    return { ...DEFAULT_CONFIG };
+  }
+}
+
+function writePeerAiConfig(patch) {
+  fs.mkdirSync(PEER_AI_DIR, { recursive: true });
+  const current = loadPeerAiConfig();
+  const next = { ...current, ...patch };
+  fs.writeFileSync(PEER_AI_CONFIG, JSON.stringify(next, null, 2) + '\n', 'utf8');
+}
+
+function loadRounds() {
+  try {
+    return JSON.parse(fs.readFileSync(PEER_AI_ROUNDS, 'utf8'));
+  } catch {
+    return { last_activity: null, rounds: {} };
+  }
+}
+
+function writeRounds(rounds) {
+  fs.mkdirSync(PEER_AI_DIR, { recursive: true });
+  fs.writeFileSync(PEER_AI_ROUNDS, JSON.stringify(rounds, null, 2) + '\n', 'utf8');
+}
+
+function copyGuardScript() {
+  const src = path.join(__dirname, 'guard.js');
+  if (!fs.existsSync(src)) {
+    throw new Error(`guard.js not found at ${src} — package may be corrupted`);
+  }
+  fs.mkdirSync(PEER_AI_DIR, { recursive: true });
+  fs.copyFileSync(src, PEER_AI_GUARD);
+  fs.chmodSync(PEER_AI_GUARD, 0o755);
+}
+
+// -------- Instructions file helpers --------
+function updateInstructions({ filePath, targets, version, maxRounds }) {
   const blockTemplate = readTemplate('instructions-block.md.tmpl');
-  const block = renderTemplate(blockTemplate, { targets, version });
+  const block = renderTemplate(blockTemplate, { targets, version, maxRounds });
 
   if (!fs.existsSync(filePath)) {
     writeFileAtomic(filePath, block);
@@ -390,7 +704,6 @@ function updateInstructions({ filePath, targets, version }) {
   const closeIdx = existing.indexOf(INSTRUCTIONS_CLOSE_MARKER);
 
   if (openIdx >= 0 && closeIdx > openIdx) {
-    // Block exists — replace in place
     const before = existing.slice(0, openIdx);
     const after = existing.slice(closeIdx + INSTRUCTIONS_CLOSE_MARKER.length);
     const updated = before + block.trimEnd() + after;
@@ -399,16 +712,11 @@ function updateInstructions({ filePath, targets, version }) {
     return 'updated';
   }
 
-  // Block missing — append with a separator
   const separator = existing.endsWith('\n\n') ? '' : existing.endsWith('\n') ? '\n' : '\n\n';
   fs.writeFileSync(filePath, existing + separator + block, 'utf8');
   return 'added';
 }
 
-/**
- * Remove the peer-ai block from an instructions file. Leaves the rest of the file intact.
- * Returns true if a block was removed, false otherwise.
- */
 function removeInstructionsBlock(filePath) {
   if (!fs.existsSync(filePath)) return false;
   const existing = fs.readFileSync(filePath, 'utf8');
@@ -426,7 +734,6 @@ function removeInstructionsBlock(filePath) {
   } else if (after) {
     cleaned = after;
   } else {
-    // File would be empty — delete it entirely to avoid leaving orphan files.
     fs.unlinkSync(filePath);
     return true;
   }
@@ -434,38 +741,32 @@ function removeInstructionsBlock(filePath) {
   return true;
 }
 
-// -------- Writers --------
-function writeClaudeSkill({ installPath, targets, version }) {
+// -------- Skill writers --------
+function writeClaudeSkill({ installPath, targets, version, maxRounds }) {
   const template = readTemplate('claude/peer-ai.md.tmpl');
-  const rendered = renderTemplate(template, { targets, version });
+  const rendered = renderTemplate(template, { targets, version, maxRounds });
   writeFileAtomic(installPath, rendered);
 }
 
-function writeCodexSkill({ installPath, targets, version }) {
+function writeCodexSkill({ installPath, targets, version, maxRounds }) {
   const template = readTemplate('codex/SKILL.md.tmpl');
-  const rendered = renderTemplate(template, { targets, version });
+  const rendered = renderTemplate(template, { targets, version, maxRounds });
   writeFileAtomic(installPath, rendered);
 }
 
-function writeGeminiExtension({ installPath, targets, version }) {
-  // Gemini extension is a directory with:
-  //   gemini-extension.json
-  //   commands/<target>.toml     (one per installed target)
-  //   commands/list.toml         (always)
+function writeGeminiExtension({ installPath, targets, version, maxRounds }) {
   const extJson = readTemplate('gemini/gemini-extension.json.tmpl');
   writeFileAtomic(
     path.join(installPath, 'gemini-extension.json'),
-    renderTemplate(extJson, { targets, version }),
+    renderTemplate(extJson, { targets, version, maxRounds }),
   );
 
-  // list.toml is always installed
   const listTmpl = readTemplate('gemini/commands/list.toml.tmpl');
   writeFileAtomic(
     path.join(installPath, 'commands', 'list.toml'),
-    renderTemplate(listTmpl, { targets, version }),
+    renderTemplate(listTmpl, { targets, version, maxRounds }),
   );
 
-  // Per-target command files — only for targets that were requested
   for (const target of targets) {
     const templatePath = `gemini/commands/${target}.toml.tmpl`;
     if (!templateExists(templatePath)) {
@@ -475,9 +776,163 @@ function writeGeminiExtension({ installPath, targets, version }) {
     const tmpl = readTemplate(templatePath);
     writeFileAtomic(
       path.join(installPath, 'commands', `${target}.toml`),
-      renderTemplate(tmpl, { targets, version }),
+      renderTemplate(tmpl, { targets, version, maxRounds }),
     );
   }
+}
+
+// -------- Hook writers --------
+// Each writer edits the CLI's settings file to register PEER_AI_GUARD as a
+// PreToolUse / BeforeTool hook on the shell tool. They are idempotent: running
+// the installer twice does not duplicate entries.
+
+function writeClaudeHook({ scope, cwd }) {
+  const file = AIS.claude.hookSettingsPath(scope, cwd);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const settings = readJsonSafe(file);
+  settings.hooks = settings.hooks || {};
+  settings.hooks.PreToolUse = upsertHookMatcher(settings.hooks.PreToolUse || [], 'Bash', PEER_AI_GUARD);
+  fs.writeFileSync(file, JSON.stringify(settings, null, 2) + '\n', 'utf8');
+  return 'ok';
+}
+
+function removeClaudeHook({ scope, cwd }) {
+  const file = AIS.claude.hookSettingsPath(scope, cwd);
+  if (!fs.existsSync(file)) return false;
+  const settings = readJsonSafe(file);
+  if (!settings.hooks || !settings.hooks.PreToolUse) return false;
+  const before = JSON.stringify(settings.hooks.PreToolUse);
+  settings.hooks.PreToolUse = removeHookMatcher(settings.hooks.PreToolUse, 'Bash');
+  const after = JSON.stringify(settings.hooks.PreToolUse);
+  if (before === after) return false;
+  if (settings.hooks.PreToolUse.length === 0) delete settings.hooks.PreToolUse;
+  if (Object.keys(settings.hooks).length === 0) delete settings.hooks;
+  fs.writeFileSync(file, JSON.stringify(settings, null, 2) + '\n', 'utf8');
+  return true;
+}
+
+function writeCodexHook({ scope, cwd }) {
+  const file = AIS.codex.hookSettingsPath(scope, cwd);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const settings = readJsonSafe(file);
+  settings.hooks = settings.hooks || {};
+  settings.hooks.PreToolUse = upsertHookMatcher(settings.hooks.PreToolUse || [], 'Bash', PEER_AI_GUARD);
+  fs.writeFileSync(file, JSON.stringify(settings, null, 2) + '\n', 'utf8');
+
+  // Check codex_hooks feature flag
+  const configPath = AIS.codex.codexConfigPath(scope, cwd);
+  if (!codexHooksEnabled(configPath)) {
+    return 'needs_codex_flag';
+  }
+  return 'ok';
+}
+
+function removeCodexHook({ scope, cwd }) {
+  const file = AIS.codex.hookSettingsPath(scope, cwd);
+  if (!fs.existsSync(file)) return false;
+  const settings = readJsonSafe(file);
+  if (!settings.hooks || !settings.hooks.PreToolUse) return false;
+  const before = JSON.stringify(settings.hooks.PreToolUse);
+  settings.hooks.PreToolUse = removeHookMatcher(settings.hooks.PreToolUse, 'Bash');
+  const after = JSON.stringify(settings.hooks.PreToolUse);
+  if (before === after) return false;
+  if (settings.hooks.PreToolUse.length === 0) delete settings.hooks.PreToolUse;
+  if (Object.keys(settings.hooks).length === 0) delete settings.hooks;
+  fs.writeFileSync(file, JSON.stringify(settings, null, 2) + '\n', 'utf8');
+  return true;
+}
+
+function writeGeminiHook({ scope, cwd }) {
+  const file = AIS.gemini.hookSettingsPath(scope, cwd);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const settings = readJsonSafe(file);
+  settings.hooks = settings.hooks || {};
+  // Gemini uses BeforeTool + run_shell_command matcher
+  settings.hooks.BeforeTool = upsertHookMatcher(settings.hooks.BeforeTool || [], 'run_shell_command', PEER_AI_GUARD);
+  fs.writeFileSync(file, JSON.stringify(settings, null, 2) + '\n', 'utf8');
+  return 'gemini_warning';
+}
+
+function removeGeminiHook({ scope, cwd }) {
+  const file = AIS.gemini.hookSettingsPath(scope, cwd);
+  if (!fs.existsSync(file)) return false;
+  const settings = readJsonSafe(file);
+  if (!settings.hooks || !settings.hooks.BeforeTool) return false;
+  const before = JSON.stringify(settings.hooks.BeforeTool);
+  settings.hooks.BeforeTool = removeHookMatcher(settings.hooks.BeforeTool, 'run_shell_command');
+  const after = JSON.stringify(settings.hooks.BeforeTool);
+  if (before === after) return false;
+  if (settings.hooks.BeforeTool.length === 0) delete settings.hooks.BeforeTool;
+  if (Object.keys(settings.hooks).length === 0) delete settings.hooks;
+  fs.writeFileSync(file, JSON.stringify(settings, null, 2) + '\n', 'utf8');
+  return true;
+}
+
+// -------- Hook array helpers (shared across CLIs — same JSON schema) --------
+
+/**
+ * Insert or update the peer-ai hook entry in a hooks array for the given matcher.
+ * Schema assumed:
+ *   [ { matcher: "Bash", hooks: [ { type: "command", command: "..." } ] }, ... ]
+ * Idempotent: if an entry with our guard command exists, it's left in place.
+ */
+function upsertHookMatcher(hooksArray, matcher, guardCommand) {
+  const arr = Array.isArray(hooksArray) ? [...hooksArray] : [];
+  let entry = arr.find((e) => e && e.matcher === matcher);
+  if (!entry) {
+    entry = { matcher, hooks: [] };
+    arr.push(entry);
+  }
+  entry.hooks = entry.hooks || [];
+  const existing = entry.hooks.find((h) => h && h.type === 'command' && typeof h.command === 'string' && h.command.endsWith(HOOK_MARKER_COMMAND_SUFFIX));
+  if (existing) {
+    existing.command = guardCommand;
+  } else {
+    entry.hooks.push({ type: 'command', command: guardCommand });
+  }
+  return arr;
+}
+
+/**
+ * Remove only the peer-ai hook entry from a hooks array for the given matcher.
+ * Leaves other user hooks untouched. If a matcher ends up with no hooks, the
+ * matcher entry is dropped too.
+ */
+function removeHookMatcher(hooksArray, matcher) {
+  if (!Array.isArray(hooksArray)) return hooksArray;
+  return hooksArray
+    .map((entry) => {
+      if (!entry || entry.matcher !== matcher || !Array.isArray(entry.hooks)) return entry;
+      const filtered = entry.hooks.filter(
+        (h) => !(h && h.type === 'command' && typeof h.command === 'string' && h.command.endsWith(HOOK_MARKER_COMMAND_SUFFIX)),
+      );
+      if (filtered.length === 0) return null;
+      return { ...entry, hooks: filtered };
+    })
+    .filter(Boolean);
+}
+
+// -------- Codex feature flag helpers --------
+function codexHooksEnabled(configPath) {
+  if (!fs.existsSync(configPath)) return false;
+  const content = fs.readFileSync(configPath, 'utf8');
+  return /(\[features\][\s\S]*?\bcodex_hooks\s*=\s*true\b)/m.test(content);
+}
+
+function enableCodexHooksFlag(scope, cwd) {
+  const configPath = AIS.codex.codexConfigPath(scope, cwd);
+  fs.mkdirSync(path.dirname(configPath), { recursive: true });
+  let content = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf8') : '';
+  if (/\[features\]/.test(content)) {
+    if (/\bcodex_hooks\s*=\s*false\b/.test(content)) {
+      content = content.replace(/\bcodex_hooks\s*=\s*false\b/, 'codex_hooks = true');
+    } else if (!/\bcodex_hooks\s*=\s*true\b/.test(content)) {
+      content = content.replace(/\[features\]/, '[features]\ncodex_hooks = true');
+    }
+  } else {
+    content = (content.endsWith('\n') ? content : content + '\n') + '\n[features]\ncodex_hooks = true\n';
+  }
+  fs.writeFileSync(configPath, content, 'utf8');
 }
 
 // -------- Template helpers --------
@@ -493,14 +948,15 @@ function templateExists(relPath) {
 
 /**
  * Minimal template engine:
- *   {{version}}                 -> the peer-ai version string
- *   {{targets_list}}            -> comma-separated labels, e.g. "Claude, Gemini"
- *   {{targets_keys}}            -> comma-separated keys, e.g. "claude, gemini"
- *   {{#if_target NAME}}...{{/if_target}}   -> include block only if NAME is in targets
- *   {{#each_target}}...{{/each_target}}    -> repeat block for each target; use {{target_key}} and {{target_label}} inside
+ *   {{version}}                          -> peer-ai version
+ *   {{max_rounds}}                       -> configured max per session
+ *   {{targets_list}}                     -> comma-separated labels
+ *   {{targets_keys}}                     -> comma-separated keys
+ *   {{#if_target NAME}}...{{/if_target}} -> include block only if NAME is a target
+ *   {{#each_target}}...{{/each_target}}  -> repeat for each target ({{target_key}}, {{target_label}})
  */
 function renderTemplate(tmpl, ctx) {
-  const { targets, version } = ctx;
+  const { targets, version, maxRounds } = ctx;
   const labels = {
     claude: 'Claude Code',
     codex: 'Codex CLI (OpenAI)',
@@ -509,7 +965,6 @@ function renderTemplate(tmpl, ctx) {
 
   let out = tmpl;
 
-  // {{#each_target}}...{{/each_target}}
   out = out.replace(/\{\{#each_target\}\}([\s\S]*?)\{\{\/each_target\}\}/g, (_, block) => {
     return targets
       .map((t) =>
@@ -520,15 +975,14 @@ function renderTemplate(tmpl, ctx) {
       .join('');
   });
 
-  // {{#if_target NAME}}...{{/if_target}}
   out = out.replace(/\{\{#if_target\s+(\w+)\}\}([\s\S]*?)\{\{\/if_target\}\}/g, (_, name, block) => {
     return targets.includes(name) ? block : '';
   });
 
-  // Simple substitutions
   out = out.replace(/\{\{targets_list\}\}/g, targets.map((t) => labels[t] || t).join(', '));
   out = out.replace(/\{\{targets_keys\}\}/g, targets.join(', '));
   out = out.replace(/\{\{version\}\}/g, version);
+  out = out.replace(/\{\{max_rounds\}\}/g, String(maxRounds ?? DEFAULT_CONFIG.max_rounds));
 
   return out;
 }
@@ -537,6 +991,16 @@ function renderTemplate(tmpl, ctx) {
 function writeFileAtomic(filePath, content) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, content, 'utf8');
+}
+
+function readJsonSafe(filePath) {
+  if (!fs.existsSync(filePath)) return {};
+  try {
+    const raw = fs.readFileSync(filePath, 'utf8').trim();
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
 }
 
 // -------- Detection --------
@@ -634,6 +1098,22 @@ async function askTargets(source, candidates) {
   return [...new Set(selected)];
 }
 
+async function askMaxRounds() {
+  console.log();
+  console.log(`${bold}Max peer consultations per target per session?${reset}`);
+  console.log(`peer-ai caps AI-to-AI loops. Default is 5 per target per session (session = 60min inactivity).`);
+  console.log(`${dim}You can change this later with \`peer-ai config set max_rounds N\` or temporarily${reset}`);
+  console.log(`${dim}via \`export PEER_AI_MAX_ROUNDS=N\`.${reset}`);
+  const answer = await ask(`Max rounds [${DEFAULT_CONFIG.max_rounds}]: `);
+  if (!answer) return DEFAULT_CONFIG.max_rounds;
+  const n = parseInt(answer, 10);
+  if (isNaN(n) || n < 1) {
+    console.log(`${yellow}Invalid value, using default ${DEFAULT_CONFIG.max_rounds}.${reset}`);
+    return DEFAULT_CONFIG.max_rounds;
+  }
+  return n;
+}
+
 // -------- Output --------
 function printBanner() {
   console.log();
@@ -649,42 +1129,63 @@ installed AI can ask any other installed AI for a second opinion, code review,
 or deep analysis.
 
 ${bold}USAGE${reset}
-  npx @pilosite/peer-ai@latest [OPTIONS]
+  npx @pilosite/peer-ai@latest [OPTIONS]               # install
+  npx @pilosite/peer-ai@latest config get [KEY]        # print config
+  npx @pilosite/peer-ai@latest config set KEY VALUE    # update config
+  npx @pilosite/peer-ai@latest config reset            # reset config to defaults
+  npx @pilosite/peer-ai@latest reset [TARGET]          # reset round counter (all or one target)
+  npx @pilosite/peer-ai@latest status                  # show current round usage
 
 ${bold}SCOPE${reset}
-  -g, --global      Install under your home directory (~/.claude, ~/.codex, ...)
-  -l, --local       Install under the current project (./.claude, ./.codex, ...)
+  -g, --global           Install under your home directory (default)
+  -l, --local            Install under the current project
 
 ${bold}SOURCES${reset}
-      --claude      Install peer-ai in Claude Code (must be detected)
-      --codex       Install peer-ai in Codex CLI
-      --gemini      Install peer-ai in Gemini CLI
-      --all         Install in all detected sources, each calling all others
+      --claude           Install peer-ai in Claude Code (must be detected)
+      --codex            Install peer-ai in Codex CLI
+      --gemini           Install peer-ai in Gemini CLI
+      --all              Install in all detected sources
+
+${bold}CAP ENFORCEMENT${reset}
+      --max-rounds N     Configure the per-session cap (default: 5)
+      --hooks            Install hard-block hooks (interactive default)
+      --no-hooks         Skip hard-block hooks (soft cap only)
 
 ${bold}INSTRUCTIONS FILES${reset}
-      --instructions     Add/update the peer-ai block in CLAUDE.md / AGENTS.md / GEMINI.md
+      --instructions     Add/update peer-ai block in CLAUDE.md / AGENTS.md / GEMINI.md
       --no-instructions  Skip instructions-file updates entirely
-                         (default: ask interactively, yes when used with --yes/--all)
 
 ${bold}OTHER${reset}
-  -y, --yes         Skip confirmation prompts, accept all defaults
-  -u, --uninstall   Remove peer-ai from the scope (also strips instructions blocks)
-  -v, --version     Print version
-  -h, --help        Print this help
+  -y, --yes              Skip confirmation prompts, accept all defaults
+  -u, --uninstall        Remove peer-ai from the scope
+  -v, --version          Print version
+  -h, --help             Print this help
+
+${bold}CONFIG KEYS${reset}
+  max_rounds    Integer. Per-target-per-session cap. Default: 5
+  ttl_minutes   Integer. Minutes of inactivity before a session auto-resets. Default: 60
+  hard_block    Boolean. Whether hooks actually block (vs observe only). Default: true
+
+${bold}ENVIRONMENT${reset}
+  PEER_AI_MAX_ROUNDS     Temporary override of max_rounds for the current shell.
+  PEER_AI_DEBUG          Enable guard debug logging to ~/.peer-ai/guard.log
 
 ${bold}EXAMPLES${reset}
-  npx @pilosite/peer-ai@latest                      # interactive install, user-level
-  npx @pilosite/peer-ai@latest --all --yes          # install everywhere, no prompts
-  npx @pilosite/peer-ai@latest --local --claude     # Claude Code only, project-level
-  npx @pilosite/peer-ai@latest --uninstall          # remove from user-level
-  npx @pilosite/peer-ai@latest --uninstall --local  # remove from project
+  npx @pilosite/peer-ai@latest                            # interactive install
+  npx @pilosite/peer-ai@latest --all --yes                # everywhere, no prompts
+  npx @pilosite/peer-ai@latest --max-rounds 10 --all -y   # raise cap on install
+  npx @pilosite/peer-ai@latest --local --claude           # project-local, Claude only
+  npx @pilosite/peer-ai@latest config set max_rounds 10   # bump cap later
+  npx @pilosite/peer-ai@latest reset codex                # reset codex counter
+  npx @pilosite/peer-ai@latest status                     # check state
+  npx @pilosite/peer-ai@latest --uninstall                # remove
 
 ${bold}DOCS${reset}
   https://github.com/Pilosite/peer-ai
 `);
 }
 
-function printUsageHint(sources) {
+function printUsageHint(sources, maxRounds) {
   console.log(`${bold}Usage${reset}`);
   for (const src of sources) {
     if (src === 'claude') {
@@ -697,5 +1198,11 @@ function printUsageHint(sources) {
       console.log(`                  /peer-ai:list`);
     }
   }
+  console.log();
+  console.log(`${bold}Cap:${reset} ${maxRounds} consultations per target per session`);
+  console.log(`  ${dim}Change permanently:${reset}  npx @pilosite/peer-ai@latest config set max_rounds N`);
+  console.log(`  ${dim}Override this shell:${reset} export PEER_AI_MAX_ROUNDS=N`);
+  console.log(`  ${dim}Check status:${reset}        npx @pilosite/peer-ai@latest status`);
+  console.log(`  ${dim}Reset counter:${reset}       npx @pilosite/peer-ai@latest reset [target]`);
   console.log();
 }

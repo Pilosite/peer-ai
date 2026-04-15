@@ -67,19 +67,28 @@ Re-run `npx @pilosite/peer-ai@latest` to reconfigure, or install <target> first.
 
 **Step 3: Check follow-up budget**
 
-Bounded to **5 rounds per target per session** to prevent infinite ping-pong loops between AIs. Scan your current conversation history — if you already invoked the same target 5 times, refuse:
+Bounded to **{{max_rounds}} rounds per target per session** to prevent infinite ping-pong loops between AIs. The cap is enforced in two layers:
+
+1. **Hard block via hook** (if installed): a `peer-ai` guard script wired into Claude Code's `PreToolUse` hook will refuse the shell call with exit 2 and a clear reason once the cap is reached. You don't need to count yourself in that case — the hook will abort the call before the peer CLI runs.
+2. **Soft self-check**: even without hooks, scan your current conversation history — if you already invoked the same target {{max_rounds}} times, refuse BEFORE trying to run the command. This is defense-in-depth.
+
+If the guard blocks (stderr message starts with `peer-ai:`), relay the refusal to the user as-is and stop:
 
 ```
 ~~~
-You've already consulted <target> 5 times in this session. To prevent an
+You've already consulted <target> {{max_rounds}} times in this session. To prevent an
 infinite loop between models, peer-ai stops here.
 
 Options:
-  - /clear to reset the counter
-  - Synthesize the 5 prior responses yourself
-  - Switch target
+  - /clear to reset the counter (starts a fresh session — both layers reset)
+  - Synthesize the {{max_rounds}} prior responses yourself
+  - Switch target (each target has its own independent counter)
+  - Raise the cap: `npx @pilosite/peer-ai@latest config set max_rounds N`
+  - Override just this shell: `export PEER_AI_MAX_ROUNDS=N`
 ~~~
 ```
+
+The user can also inspect counters with `npx @pilosite/peer-ai@latest status` and reset a specific target with `npx @pilosite/peer-ai@latest reset <target>`.
 
 **Step 4: Smart context assembly**
 

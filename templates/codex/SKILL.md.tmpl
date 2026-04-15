@@ -51,7 +51,12 @@ If missing (user may have uninstalled it after running peer-ai installer), stop 
 
 ### Step 3: Check follow-up budget
 
-Bounded to **5 rounds per target per session**. Scan conversation history — if 5 prior invocations of the same target exist, refuse and suggest `/clear` or switching target.
+Bounded to **{{max_rounds}} rounds per target per session**. Enforced in two layers:
+
+1. **Hard block via hook** (if installed): a `peer-ai` guard script wired into Codex's `PreToolUse` hook refuses the shell call with exit 2 once the cap is reached. If you see stderr starting with `peer-ai:`, relay it to the user and stop.
+2. **Soft self-check**: scan conversation history — if {{max_rounds}} prior invocations of the same target exist, refuse BEFORE trying to run the command.
+
+When blocked, suggest the user: `/clear` to reset, switch target, raise the cap (`npx @pilosite/peer-ai@latest config set max_rounds N`), or temporary override (`export PEER_AI_MAX_ROUNDS=N`). They can also use `npx @pilosite/peer-ai@latest status` and `reset` subcommands.
 
 ### Step 4: Smart context assembly
 
@@ -160,7 +165,7 @@ If follow-up:
 - **Claude / Gemini**: no native session resume in one-shot mode. Re-include the previous exchange as context: `Previous round: <Q> → <A>. Now: <new Q>.`
 - **Codex** (if supported): `codex exec resume --last --sandbox read-only --output-last-message <new> - < <new-brief>`
 
-Warn before exceeding 5 rounds.
+Warn before exceeding {{max_rounds}} rounds.
 
 ## Security notes
 

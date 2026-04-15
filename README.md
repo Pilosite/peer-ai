@@ -82,7 +82,7 @@ When you invoke the skill (example: `/peer-ai codex review last 2 commits` from 
 
 1. **Parse.** Extract target (`codex`) and question (`review last 2 commits`).
 2. **Verify.** `which codex` — if the CLI disappeared since install, refuse cleanly.
-3. **Budget check.** Max 5 consultations per target per session. Soft counter based on conversation history — `/clear` resets.
+3. **Budget check.** Max N consultations per target per session (default 5, configurable). Enforced by two layers: a **hard-block hook** (native PreToolUse/BeforeTool on each CLI — the guard script at `~/.peer-ai/guard.js` refuses with exit 2 + stderr), and a **soft self-check** in the skill markdown as defense-in-depth. Sessions auto-reset after 60 minutes of inactivity. You can also reset manually with `npx @pilosite/peer-ai@latest reset [target]`, raise the cap permanently with `config set max_rounds N`, or override temporarily with `export PEER_AI_MAX_ROUNDS=N`.
 4. **Smart context.** The source AI decides what to include in the brief based on the question: diff for "review", specific files for "look at X", architecture docs for "design", error logs for "debug". Deliberately capped around 5000 tokens unless you explicitly ask for deep review.
 5. **Invoke.** Writes brief to a temp file, calls the target CLI in its non-interactive / read-only mode:
    - **Codex:** `codex exec --sandbox read-only --skip-git-repo-check --output-last-message "$OUT" --color never - < "$BRIEF"`
@@ -97,10 +97,71 @@ When you invoke the skill (example: `/peer-ai codex review last 2 commits` from 
 These aren't nice-to-haves — they're baked into every skill template so the source AI respects them.
 
 - **Read-only sandbox on peer Codex.** Never downgrade below `--sandbox read-only`. The peer reviews, it doesn't write.
-- **Bounded rounds.** 5 per target per session, hard limit. Prevents infinite ping-pong when two models disagree.
+- **Bounded rounds.** N per target per session (default 5, configurable), enforced by native hooks on all 3 CLIs (`PreToolUse` on Claude/Codex, `BeforeTool` on Gemini). Prevents infinite ping-pong when two models disagree. See "Managing the cap" below.
 - **No secrets leakage.** Briefs are scrubbed for env vars, API keys, tokens before being sent to a peer.
 - **Prompt injection defense.** When a brief includes LLM prompts (e.g. reviewing a prompt template file), they're wrapped in `<user_content>...</user_content>` XML delimiters so the peer parses them as data, not instructions.
 - **No delegated understanding.** The peer reviews and reports. The source AI synthesizes and decides. Skills are written to refuse "based on your findings, fix it" style delegation.
+
+## Managing the cap
+
+The per-session consultation cap (default 5 per target) is enforced by a native hook on each CLI, backed by a shared guard script at `~/.peer-ai/guard.js`. You can tweak or override it at three levels:
+
+### Change it permanently
+
+```bash
+npx @pilosite/peer-ai@latest config set max_rounds 10
+npx @pilosite/peer-ai@latest config get            # verify
+```
+
+This writes `~/.peer-ai/config.json`. The guard reads this file on every invocation, so the change takes effect immediately without restarting any CLI.
+
+### Override just this shell
+
+```bash
+export PEER_AI_MAX_ROUNDS=15
+# ... peer-ai calls in this terminal now use 15 as the cap ...
+```
+
+When the shell closes (or you `unset PEER_AI_MAX_ROUNDS`), you're back to whatever is in `config.json`. Useful for one-off debug sessions where you need a higher cap without bumping it permanently.
+
+### Reset the counter
+
+```bash
+npx @pilosite/peer-ai@latest reset            # all targets
+npx @pilosite/peer-ai@latest reset codex      # only codex
+```
+
+Wipes the round counter in `~/.peer-ai/rounds.json` without touching the cap. The cap stays at whatever it is; you just start over from zero for that session.
+
+### Check where you are
+
+```bash
+npx @pilosite/peer-ai@latest status
+```
+
+Shows current cap, per-target usage, time since last activity, and when the session will auto-reset. If any target is at the cap, it's marked in red as `BLOCKED`.
+
+### Auto-reset
+
+Sessions automatically reset after **60 minutes of inactivity** by default. That TTL is also configurable:
+
+```bash
+npx @pilosite/peer-ai@latest config set ttl_minutes 30
+```
+
+### Disable the hard block
+
+If for some reason you want the skill templates to be the only enforcement (no hook, no hard block):
+
+```bash
+# At install time
+npx @pilosite/peer-ai@latest --no-hooks --all --yes
+
+# Or flip it later
+npx @pilosite/peer-ai@latest config set hard_block false
+```
+
+Not recommended — the soft check relies on the model honestly counting its own invocations. Hooks exist precisely because that's not always reliable.
 
 ## Install scenarios
 
