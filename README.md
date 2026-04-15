@@ -3,8 +3,8 @@
 > **AI-to-AI peer consultation.** Let Claude Code, Codex CLI, and Gemini CLI ask each other for a second opinion, code review, or deep analysis — with one command.
 
 [![npm version](https://img.shields.io/npm/v/@pilosite/peer-ai.svg)](https://www.npmjs.com/package/@pilosite/peer-ai)
-[![license](https://img.shields.io/npm/l/@pilosite/peer-ai.svg)](LICENSE)
-[![node](https://img.shields.io/node/v/@pilosite/peer-ai.svg)](https://nodejs.org)
+[![license](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![node](https://img.shields.io/badge/node-%3E%3D18-brightgreen.svg)](https://nodejs.org)
 
 ---
 
