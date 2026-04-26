@@ -4,15 +4,15 @@
  *
  * Installs the peer-ai skill in Claude Code, Codex CLI, and/or Gemini CLI
  * with a target matrix picked by the user, a shared guard script for hard
- * enforcement of the per-session consultation cap, and optional updates to
- * each CLI's instructions file (CLAUDE.md / AGENTS.md / GEMINI.md).
+ * enforcement of the per-exchange-chain consultation cap, and optional updates
+ * to each CLI's instructions file (CLAUDE.md / AGENTS.md / GEMINI.md).
  *
  * Usage:
  *   npx @pilosite/peer-ai@latest                       # interactive install
  *   npx @pilosite/peer-ai@latest --local               # project-level install
  *   npx @pilosite/peer-ai@latest --global              # user-level install (default)
  *   npx @pilosite/peer-ai@latest --all                 # install everywhere detected
- *   npx @pilosite/peer-ai@latest --max-rounds 10       # raise the per-session cap
+ *   npx @pilosite/peer-ai@latest --max-rounds 10       # raise the per-chain cap
  *   npx @pilosite/peer-ai@latest --no-hooks            # soft cap only, no hard block
  *   npx @pilosite/peer-ai@latest --uninstall           # remove peer-ai
  *   npx @pilosite/peer-ai@latest config get            # print current config
@@ -49,7 +49,7 @@ const PEER_AI_GUARD = path.join(PEER_AI_DIR, 'guard.js');
 
 const DEFAULT_CONFIG = {
   max_rounds: 5,
-  ttl_minutes: 60,
+  ttl_minutes: 30,
   hard_block: true,
 };
 
@@ -293,7 +293,7 @@ async function runInstall() {
     console.log();
     console.log(`${bold}Enable hard-block hooks?${reset}`);
     console.log(`Hooks install a shared guard script in each CLI that hard-blocks`);
-    console.log(`peer-ai calls once the per-session cap is reached. Without hooks,`);
+    console.log(`peer-ai calls once the per-chain cap is reached. Without hooks,`);
     console.log(`the cap is enforced only by a soft instruction inside each skill.`);
     installHooks = await askYesNo('Install hard-block hooks?', true);
   }
@@ -301,7 +301,7 @@ async function runInstall() {
   // Step 7: Preview plan
   console.log();
   console.log(`${bold}Install plan:${reset}`);
-  console.log(`  ${dim}max_rounds:${reset} ${maxRounds} per target per session`);
+  console.log(`  ${dim}max_rounds:${reset} ${maxRounds} per target per exchange chain`);
   console.log(`  ${dim}hard block:${reset} ${installHooks ? 'yes (hooks)' : 'no (soft cap only)'}`);
   console.log();
   for (const src of sources) {
@@ -599,51 +599,51 @@ async function runReset(subArgs) {
   }
 
   if (target) {
-    const rounds = loadRounds();
-    if (!(target in (rounds.rounds || {}))) {
-      console.log(`${dim}No counter entry for "${target}". Nothing to reset.${reset}`);
+    const state = loadRounds();
+    if (!(target in (state.chains || {}))) {
+      console.log(`${dim}No chain entry for "${target}". Nothing to reset.${reset}`);
       return;
     }
-    delete rounds.rounds[target];
-    rounds.last_activity = new Date().toISOString();
-    writeRounds(rounds);
-    console.log(`${green}✓${reset} Reset round counter for ${bold}${target}${reset}`);
+    delete state.chains[target];
+    writeRounds(state);
+    console.log(`${green}✓${reset} Reset chain counter for ${bold}${target}${reset}`);
   } else {
-    writeRounds({ last_activity: new Date().toISOString(), rounds: {} });
-    console.log(`${green}✓${reset} Reset all round counters`);
+    writeRounds({ chains: {} });
+    console.log(`${green}✓${reset} Reset all chain counters`);
   }
 }
 
 // -------- Subcommand: status --------
 async function runStatus() {
   const config = loadPeerAiConfig();
-  const rounds = fs.existsSync(PEER_AI_ROUNDS) ? loadRounds() : { rounds: {}, last_activity: null };
+  const state = fs.existsSync(PEER_AI_ROUNDS) ? loadRounds() : { chains: {} };
 
   console.log(`${bold}peer-ai status${reset}`);
   console.log();
   console.log(`${dim}config:${reset}`);
   console.log(`  max_rounds:  ${config.max_rounds}${process.env.PEER_AI_MAX_ROUNDS ? ` ${yellow}(overridden by PEER_AI_MAX_ROUNDS=${process.env.PEER_AI_MAX_ROUNDS})${reset}` : ''}`);
-  console.log(`  ttl_minutes: ${config.ttl_minutes}`);
+  console.log(`  ttl_minutes: ${config.ttl_minutes} ${dim}(per-target chain inactivity before auto-reset)${reset}`);
   console.log(`  hard_block:  ${config.hard_block}`);
   console.log();
-  console.log(`${dim}rounds:${reset}`);
+  console.log(`${dim}chains (per-target — each ages independently):${reset}`);
   const effectiveMax = parseInt(process.env.PEER_AI_MAX_ROUNDS || '', 10) || config.max_rounds;
   const targets = ['claude', 'codex', 'gemini'];
+  const now = Date.now();
   for (const t of targets) {
-    const used = rounds.rounds[t] || 0;
+    const entry = state.chains[t];
+    const used = entry?.count || 0;
     const bar = used >= effectiveMax ? `${red}BLOCKED${reset}` : used > 0 ? `${yellow}${used}/${effectiveMax}${reset}` : `${dim}${used}/${effectiveMax}${reset}`;
-    console.log(`  ${t.padEnd(8)} ${bar}`);
-  }
-  if (rounds.last_activity) {
-    const age = Math.round((Date.now() - new Date(rounds.last_activity).getTime()) / 60000);
-    console.log();
-    console.log(`${dim}last activity: ${age} minute${age !== 1 ? 's' : ''} ago${reset}`);
-    const remaining = config.ttl_minutes - age;
-    if (remaining > 0) {
-      console.log(`${dim}auto-reset in: ${remaining} minute${remaining !== 1 ? 's' : ''}${reset}`);
-    } else {
-      console.log(`${dim}TTL expired — next guard call will auto-reset.${reset}`);
+    let suffix = '';
+    if (entry?.last_activity) {
+      const age = Math.round((now - new Date(entry.last_activity).getTime()) / 60000);
+      const remaining = config.ttl_minutes - age;
+      if (remaining > 0) {
+        suffix = ` ${dim}(active, auto-reset in ${remaining}min)${reset}`;
+      } else {
+        suffix = ` ${dim}(TTL expired, next call auto-resets)${reset}`;
+      }
     }
+    console.log(`  ${t.padEnd(8)} ${bar}${suffix}`);
   }
 }
 
@@ -666,17 +666,35 @@ function writePeerAiConfig(patch) {
   fs.writeFileSync(PEER_AI_CONFIG, JSON.stringify(next, null, 2) + '\n', 'utf8');
 }
 
+// Load rounds state. Handles both the current per-target chain schema
+// ({ chains: { codex: { count, last_activity }, ... } }) and the legacy
+// ({ rounds: { codex: 2 }, last_activity: "..." }) shape — legacy data is
+// migrated in-memory; the next writeRounds() persists the new shape.
 function loadRounds() {
   try {
-    return JSON.parse(fs.readFileSync(PEER_AI_ROUNDS, 'utf8'));
+    const parsed = JSON.parse(fs.readFileSync(PEER_AI_ROUNDS, 'utf8'));
+    if (parsed && typeof parsed === 'object' && parsed.chains && typeof parsed.chains === 'object') {
+      return { chains: parsed.chains };
+    }
+    if (parsed && typeof parsed === 'object' && parsed.rounds && typeof parsed.rounds === 'object') {
+      const legacyTs = parsed.last_activity || new Date(0).toISOString();
+      const chains = {};
+      for (const [t, count] of Object.entries(parsed.rounds)) {
+        if (typeof count === 'number' && count > 0) {
+          chains[t] = { count, last_activity: legacyTs };
+        }
+      }
+      return { chains };
+    }
+    return { chains: {} };
   } catch {
-    return { last_activity: null, rounds: {} };
+    return { chains: {} };
   }
 }
 
-function writeRounds(rounds) {
+function writeRounds(state) {
   fs.mkdirSync(PEER_AI_DIR, { recursive: true });
-  fs.writeFileSync(PEER_AI_ROUNDS, JSON.stringify(rounds, null, 2) + '\n', 'utf8');
+  fs.writeFileSync(PEER_AI_ROUNDS, JSON.stringify(state, null, 2) + '\n', 'utf8');
 }
 
 function copyGuardScript() {
@@ -949,7 +967,7 @@ function templateExists(relPath) {
 /**
  * Minimal template engine:
  *   {{version}}                          -> peer-ai version
- *   {{max_rounds}}                       -> configured max per session
+ *   {{max_rounds}}                       -> configured max per exchange chain
  *   {{targets_list}}                     -> comma-separated labels
  *   {{targets_keys}}                     -> comma-separated keys
  *   {{#if_target NAME}}...{{/if_target}} -> include block only if NAME is a target
@@ -1100,8 +1118,9 @@ async function askTargets(source, candidates) {
 
 async function askMaxRounds() {
   console.log();
-  console.log(`${bold}Max peer consultations per target per session?${reset}`);
-  console.log(`peer-ai caps AI-to-AI loops. Default is 5 per target per session (session = 60min inactivity).`);
+  console.log(`${bold}Max peer consultations per target per exchange chain?${reset}`);
+  console.log(`peer-ai caps AI-to-AI ping-pong loops. Default is 5 per target per chain`);
+  console.log(`(a chain auto-resets after ${DEFAULT_CONFIG.ttl_minutes}min of inactivity for that target).`);
   console.log(`${dim}You can change this later with \`peer-ai config set max_rounds N\` or temporarily${reset}`);
   console.log(`${dim}via \`export PEER_AI_MAX_ROUNDS=N\`.${reset}`);
   const answer = await ask(`Max rounds [${DEFAULT_CONFIG.max_rounds}]: `);
@@ -1147,7 +1166,7 @@ ${bold}SOURCES${reset}
       --all              Install in all detected sources
 
 ${bold}CAP ENFORCEMENT${reset}
-      --max-rounds N     Configure the per-session cap (default: 5)
+      --max-rounds N     Configure the per-chain cap (default: 5)
       --hooks            Install hard-block hooks (interactive default)
       --no-hooks         Skip hard-block hooks (soft cap only)
 
@@ -1162,8 +1181,8 @@ ${bold}OTHER${reset}
   -h, --help             Print this help
 
 ${bold}CONFIG KEYS${reset}
-  max_rounds    Integer. Per-target-per-session cap. Default: 5
-  ttl_minutes   Integer. Minutes of inactivity before a session auto-resets. Default: 60
+  max_rounds    Integer. Per-target-per-chain cap. Default: 5
+  ttl_minutes   Integer. Per-target inactivity (minutes) before a chain auto-resets. Default: 30
   hard_block    Boolean. Whether hooks actually block (vs observe only). Default: true
 
 ${bold}ENVIRONMENT${reset}
@@ -1199,7 +1218,7 @@ function printUsageHint(sources, maxRounds) {
     }
   }
   console.log();
-  console.log(`${bold}Cap:${reset} ${maxRounds} consultations per target per session`);
+  console.log(`${bold}Cap:${reset} ${maxRounds} consultations per target per exchange chain (auto-resets after inactivity)`);
   console.log(`  ${dim}Change permanently:${reset}  npx @pilosite/peer-ai@latest config set max_rounds N`);
   console.log(`  ${dim}Override this shell:${reset} export PEER_AI_MAX_ROUNDS=N`);
   console.log(`  ${dim}Check status:${reset}        npx @pilosite/peer-ai@latest status`);

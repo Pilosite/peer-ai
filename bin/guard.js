@@ -6,7 +6,7 @@
  * payload on stdin, decides whether the call is a peer-ai consultation (by
  * pattern-matching the Bash command), and either:
  *   - allows the call (exit 0)
- *   - blocks it (exit 2 + stderr reason) when the per-session round budget
+ *   - blocks it (exit 2 + stderr reason) when the per-chain round budget
  *     is exhausted for that target
  *
  * Configuration is resolved in this priority order:
@@ -14,9 +14,13 @@
  *   2. ~/.peer-ai/config.json (persistent user config)
  *   3. Hardcoded default of 5
  *
- * Round state lives in ~/.peer-ai/rounds.json. A session is considered
- * expired (auto-reset) after `ttl_minutes` of inactivity. Each successful
- * allow-decision increments the counter and refreshes last_activity.
+ * Round state lives in ~/.peer-ai/rounds.json. The cap is per-EXCHANGE-CHAIN,
+ * not per-CLI-session: each target has its own `last_activity` timestamp, and
+ * the counter for that target auto-resets after `ttl_minutes` of inactivity
+ * (default 30). The intent is to prevent infinite ping-pong on a single
+ * dialogue — once the back-and-forth pauses for >ttl_minutes, the next call
+ * starts a fresh chain. This is independent of `/clear`, new shells, or
+ * Claude/Codex/Gemini session boundaries (which the guard cannot detect).
  *
  * Debug: set PEER_AI_DEBUG=1 to log decisions to ~/.peer-ai/guard.log
  */
@@ -33,7 +37,7 @@ const DEBUG_LOG = path.join(PEER_AI_DIR, 'guard.log');
 
 const DEFAULT_CONFIG = {
   max_rounds: 5,
-  ttl_minutes: 60,
+  ttl_minutes: 30,
   hard_block: true,
 };
 
@@ -70,23 +74,27 @@ const TARGET_PATTERNS = {
       exitAllow('hard_block disabled in config');
     }
 
-    const rounds = loadRounds(config.ttl_minutes);
-    const current = rounds.rounds[target] || 0;
+    const state = loadRounds(config.ttl_minutes, target);
+    const current = state.chains[target]?.count || 0;
     const max = config.max_rounds;
 
     if (current >= max) {
       exitBlock(
-        `peer-ai: consultation limit reached (${current}/${max} for ${target} in this session).\n` +
-        `  To continue: run \`npx @pilosite/peer-ai@latest reset ${target}\` (or \`reset\` for all targets),\n` +
-        `  or raise the cap: \`npx @pilosite/peer-ai@latest config set max_rounds ${max + 5}\`,\n` +
-        `  or override just this session: \`export PEER_AI_MAX_ROUNDS=${max + 5}\`.`
+        `peer-ai: consultation limit reached (${current}/${max} for ${target} in this exchange chain).\n` +
+        `  The cap is per dialogue, not per CLI session — it auto-resets after ${config.ttl_minutes} min of\n` +
+        `  inactivity for this target. To continue immediately:\n` +
+        `    run \`npx @pilosite/peer-ai@latest reset ${target}\` (or \`reset\` for all targets),\n` +
+        `    raise the cap: \`npx @pilosite/peer-ai@latest config set max_rounds ${max + 5}\`,\n` +
+        `    or override just this shell: \`export PEER_AI_MAX_ROUNDS=${max + 5}\`.`
       );
     }
 
-    // Increment and persist.
-    rounds.rounds[target] = current + 1;
-    rounds.last_activity = new Date().toISOString();
-    saveRounds(rounds);
+    // Increment and persist (per-target chain, per-target last_activity).
+    state.chains[target] = {
+      count: current + 1,
+      last_activity: new Date().toISOString(),
+    };
+    saveRounds(state);
 
     exitAllow(`${target} consultation ${current + 1}/${max}`);
   } catch (err) {
@@ -170,34 +178,64 @@ function loadConfig() {
 
 // -------- Rounds state --------
 
-function loadRounds(ttlMinutes) {
+/**
+ * Load the rounds state and apply per-target TTL expiry for `target`.
+ *
+ * Schema (current):
+ *   { "chains": { "<target>": { "count": N, "last_activity": ISO8601 }, ... } }
+ *
+ * Backward compat: if the file uses the legacy { rounds, last_activity } shape
+ * (a single global last_activity), migrate it on read by re-using the global
+ * timestamp as each target's last_activity. The migrated state is returned;
+ * the next saveRounds() call writes the new shape to disk.
+ *
+ * Only the entry for `target` is TTL-checked here — other targets' chains are
+ * preserved as-is so we don't reset, e.g., gemini's counter when a codex chain
+ * times out. Each target ages independently.
+ */
+function loadRounds(ttlMinutes, target) {
   const now = Date.now();
   const ttlMs = (ttlMinutes || DEFAULT_CONFIG.ttl_minutes) * 60 * 1000;
 
-  if (!fs.existsSync(ROUNDS_PATH)) {
-    return { last_activity: new Date().toISOString(), rounds: {} };
-  }
+  let state = { chains: {} };
 
-  try {
-    const raw = fs.readFileSync(ROUNDS_PATH, 'utf8');
-    const parsed = JSON.parse(raw);
-    const lastActivityMs = new Date(parsed.last_activity || 0).getTime();
+  if (fs.existsSync(ROUNDS_PATH)) {
+    try {
+      const raw = fs.readFileSync(ROUNDS_PATH, 'utf8');
+      const parsed = JSON.parse(raw);
 
-    if (now - lastActivityMs > ttlMs) {
-      debug('session TTL expired, resetting counter', {
-        inactive_minutes: Math.round((now - lastActivityMs) / 60000),
-      });
-      return { last_activity: new Date().toISOString(), rounds: {} };
+      if (parsed && typeof parsed === 'object' && parsed.chains && typeof parsed.chains === 'object') {
+        // Current schema.
+        state.chains = parsed.chains;
+      } else if (parsed && typeof parsed === 'object' && parsed.rounds && typeof parsed.rounds === 'object') {
+        // Legacy schema: { rounds: { codex: 2 }, last_activity: "..." } — migrate.
+        const legacyTs = parsed.last_activity || new Date(0).toISOString();
+        for (const [t, count] of Object.entries(parsed.rounds)) {
+          if (typeof count === 'number' && count > 0) {
+            state.chains[t] = { count, last_activity: legacyTs };
+          }
+        }
+        debug('migrated legacy rounds.json shape', { migrated_targets: Object.keys(state.chains) });
+      }
+    } catch (err) {
+      debug('rounds parse error, resetting', { error: err.message });
+      state = { chains: {} };
     }
-
-    return {
-      last_activity: parsed.last_activity,
-      rounds: parsed.rounds || {},
-    };
-  } catch (err) {
-    debug('rounds parse error, resetting', { error: err.message });
-    return { last_activity: new Date().toISOString(), rounds: {} };
   }
+
+  // Apply TTL only to the target chain we're about to inspect — leave others alone.
+  if (target && state.chains[target]) {
+    const lastMs = new Date(state.chains[target].last_activity || 0).getTime();
+    if (now - lastMs > ttlMs) {
+      debug('chain TTL expired for target, resetting', {
+        target,
+        inactive_minutes: Math.round((now - lastMs) / 60000),
+      });
+      delete state.chains[target];
+    }
+  }
+
+  return state;
 }
 
 function saveRounds(rounds) {
