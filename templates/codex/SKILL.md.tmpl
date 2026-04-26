@@ -51,12 +51,12 @@ If missing (user may have uninstalled it after running peer-ai installer), stop 
 
 ### Step 3: Check follow-up budget
 
-Bounded to **{{max_rounds}} rounds per target per session**. Enforced in two layers:
+Bounded to **{{max_rounds}} rounds per target per exchange chain**. The cap is per-dialogue (auto-resets after `ttl_minutes` of inactivity for that target — default 30), NOT per Codex session. Enforced in two layers:
 
 1. **Hard block via hook** (if installed): a `peer-ai` guard script wired into Codex's `PreToolUse` hook refuses the shell call with exit 2 once the cap is reached. If you see stderr starting with `peer-ai:`, relay it to the user and stop.
-2. **Soft self-check**: scan conversation history — if {{max_rounds}} prior invocations of the same target exist, refuse BEFORE trying to run the command.
+2. **Soft self-check**: scan conversation history — if {{max_rounds}} prior invocations of the same target exist in the current exchange chain, refuse BEFORE trying to run the command.
 
-When blocked, suggest the user: `/clear` to reset, switch target, raise the cap (`npx @pilosite/peer-ai@latest config set max_rounds N`), or temporary override (`export PEER_AI_MAX_ROUNDS=N`). They can also use `npx @pilosite/peer-ai@latest status` and `reset` subcommands.
+When blocked, suggest the user: wait for the chain TTL to expire, run `npx @pilosite/peer-ai@latest reset <target>` to start a fresh chain immediately, switch target, raise the cap (`npx @pilosite/peer-ai@latest config set max_rounds N`), or temporary override (`export PEER_AI_MAX_ROUNDS=N`). They can also use `npx @pilosite/peer-ai@latest status`.
 
 ### Step 4: Smart context assembly
 
@@ -184,5 +184,5 @@ Warn before exceeding {{max_rounds}} rounds.
 ## Notes
 
 - Not auto-invoked. User must explicitly ask for a peer consultation.
-- Round counter is soft. No cross-session persistence — `/clear` resets it.
+- The hook-based hard-block counter persists in `~/.peer-ai/rounds.json` per-target / per-exchange-chain (auto-resets after `ttl_minutes` of inactivity for that target — default 30). It is independent of Codex session boundaries: `/clear` does NOT reset it. Use `npx @pilosite/peer-ai@latest reset <target>` to start a fresh chain immediately. The soft self-check in this skill is a defense-in-depth layer for environments where the hook isn't installed.
 - Symmetric skill: Claude Code and Gemini CLI have equivalent peer-ai installations. See https://github.com/Pilosite/peer-ai.

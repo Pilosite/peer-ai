@@ -67,20 +67,21 @@ Re-run `npx @pilosite/peer-ai@latest` to reconfigure, or install <target> first.
 
 **Step 3: Check follow-up budget**
 
-Bounded to **{{max_rounds}} rounds per target per session** to prevent infinite ping-pong loops between AIs. The cap is enforced in two layers:
+Bounded to **{{max_rounds}} rounds per target per exchange chain** to prevent infinite ping-pong loops between AIs. The cap is **per dialogue, not per Claude session** — each target has its own counter that auto-resets after a configurable inactivity window (default 30 min). `/clear` does NOT reset the counter (the guard runs out-of-process and cannot see Claude's session boundary). The cap is enforced in two layers:
 
 1. **Hard block via hook** (if installed): a `peer-ai` guard script wired into Claude Code's `PreToolUse` hook will refuse the shell call with exit 2 and a clear reason once the cap is reached. You don't need to count yourself in that case — the hook will abort the call before the peer CLI runs.
-2. **Soft self-check**: even without hooks, scan your current conversation history — if you already invoked the same target {{max_rounds}} times, refuse BEFORE trying to run the command. This is defense-in-depth.
+2. **Soft self-check**: even without hooks, scan your current conversation history — if you already invoked the same target {{max_rounds}} times in the current exchange chain, refuse BEFORE trying to run the command. This is defense-in-depth.
 
 If the guard blocks (stderr message starts with `peer-ai:`), relay the refusal to the user as-is and stop:
 
 ```
 ~~~
-You've already consulted <target> {{max_rounds}} times in this session. To prevent an
-infinite loop between models, peer-ai stops here.
+You've already consulted <target> {{max_rounds}} times in this exchange chain. To prevent
+an infinite loop between models, peer-ai stops here.
 
 Options:
-  - /clear to reset the counter (starts a fresh session — both layers reset)
+  - Wait until the chain TTL expires (auto-reset) or run
+    `npx @pilosite/peer-ai@latest reset <target>` to start a fresh chain immediately
   - Synthesize the {{max_rounds}} prior responses yourself
   - Switch target (each target has its own independent counter)
   - Raise the cap: `npx @pilosite/peer-ai@latest config set max_rounds N`
@@ -237,7 +238,7 @@ Increment the round counter. If the next call would exceed 5, warn before procee
 
 <success_criteria>
 - [ ] Target CLI detected or clear refusal message
-- [ ] Follow-up budget checked (max 5 per target per session)
+- [ ] Follow-up budget checked (max 5 per target per exchange chain)
 - [ ] Brief assembled with smart context (not dumped entire codebase)
 - [ ] Target CLI invoked with correct sandbox/read-only flags
 - [ ] Response presented verbatim with clear framing
@@ -248,7 +249,7 @@ Increment the round counter. If the next call would exceed 5, warn before procee
 
 <notes>
 - The skill is deliberately **not auto-invoked**. User must explicitly run `/peer-ai`. Claude should not silently consult peers without being asked.
-- Follow-up round counter is soft — rely on Claude's honesty to count recent invocations. No hard persistence across sessions because `/clear` should reset it.
+- The hook-based hard-block counter persists in `~/.peer-ai/rounds.json` and is per-target / per-exchange-chain (auto-resets after `ttl_minutes` of inactivity for that target — default 30). It is independent of Claude session boundaries: `/clear` does NOT reset it. To start a fresh chain immediately, use `npx @pilosite/peer-ai@latest reset <target>`. The soft self-check inside this skill is a defense-in-depth layer for environments where the hook isn't installed.
 - For Gemini and Claude follow-ups (which don't have native session resume), the skill re-includes the previous exchange as context in the new brief. State it explicitly: "Previous round: <Q> → <A>. Now: <new Q>."
 - This skill is part of the `peer-ai` family — symmetric skills exist for Codex CLI and Gemini CLI so peers can consult back. See https://github.com/Pilosite/peer-ai.
 </notes>

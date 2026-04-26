@@ -25,7 +25,7 @@ This repository has the **peer-ai** skill installed. You can consult another ins
 {{/if_target}}
 
 **Guardrails (non-negotiable):**
-- Max {{max_rounds}} peer consultations per target per session — prevents infinite AI-to-AI loops (configurable: `npx @pilosite/peer-ai@latest config set max_rounds N`, or temporary override `export PEER_AI_MAX_ROUNDS=N`)
+- Max {{max_rounds}} peer consultations per target per exchange chain — prevents infinite AI-to-AI ping-pong loops on a single dialogue. The cap is per-chain (auto-resets after `ttl_minutes` of inactivity for that target — default 30), NOT per CLI session: `/clear` does NOT reset it. To start a fresh chain immediately: `npx @pilosite/peer-ai@latest reset <target>`. Configurable: `npx @pilosite/peer-ai@latest config set max_rounds N`, or temporary override `export PEER_AI_MAX_ROUNDS=N`.
 - Always use `--sandbox read-only` when invoking Codex as a peer
 - Never paraphrase the peer's response — relay verbatim under a clear heading
 - Scrub secrets (env vars, API keys, tokens) before sending briefs to peers

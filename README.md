@@ -22,7 +22,7 @@ Today you'd open another terminal, copy-paste the diff, write a brief, paste the
 /peer-ai gemini what's wrong with this SQL
 ```
 
-The source AI assembles a smart brief (diff, relevant files, your question), calls the target CLI in read-only mode, and relays the response verbatim. Bounded to 5 rounds per target per session so you don't get stuck in an AI-to-AI loop.
+The source AI assembles a smart brief (diff, relevant files, your question), calls the target CLI in read-only mode, and relays the response verbatim. Bounded to **5 rounds per target per exchange chain** so you don't get stuck in an AI-to-AI loop. The cap is per-dialogue (auto-resets after 30 min of inactivity for that target), not per CLI session — see [Managing the cap](#managing-the-cap) for details.
 
 ## What it is
 
@@ -82,7 +82,7 @@ When you invoke the skill (example: `/peer-ai codex review last 2 commits` from 
 
 1. **Parse.** Extract target (`codex`) and question (`review last 2 commits`).
 2. **Verify.** `which codex` — if the CLI disappeared since install, refuse cleanly.
-3. **Budget check.** Max N consultations per target per session (default 5, configurable). Enforced by two layers: a **hard-block hook** (native PreToolUse/BeforeTool on each CLI — the guard script at `~/.peer-ai/guard.js` refuses with exit 2 + stderr), and a **soft self-check** in the skill markdown as defense-in-depth. Sessions auto-reset after 60 minutes of inactivity. You can also reset manually with `npx @pilosite/peer-ai@latest reset [target]`, raise the cap permanently with `config set max_rounds N`, or override temporarily with `export PEER_AI_MAX_ROUNDS=N`.
+3. **Budget check.** Max N consultations per target per **exchange chain** (default 5, configurable). The cap is per-dialogue, not per CLI session: each target has its own counter that auto-resets after `ttl_minutes` of inactivity for that target (default 30). Enforced by two layers: a **hard-block hook** (native PreToolUse/BeforeTool on each CLI — the guard script at `~/.peer-ai/guard.js` refuses with exit 2 + stderr), and a **soft self-check** in the skill markdown as defense-in-depth. **`/clear` does NOT reset the counter** (the guard runs out-of-process and cannot see CLI session boundaries). To start a fresh chain immediately: `npx @pilosite/peer-ai@latest reset [target]`. To raise the cap permanently: `config set max_rounds N`. To override temporarily for one shell: `export PEER_AI_MAX_ROUNDS=N`.
 4. **Smart context.** The source AI decides what to include in the brief based on the question: diff for "review", specific files for "look at X", architecture docs for "design", error logs for "debug". Deliberately capped around 5000 tokens unless you explicitly ask for deep review.
 5. **Invoke.** Writes brief to a temp file, calls the target CLI in its non-interactive / read-only mode:
    - **Codex:** `codex exec --sandbox read-only --skip-git-repo-check --output-last-message "$OUT" --color never - < "$BRIEF"`
@@ -97,14 +97,21 @@ When you invoke the skill (example: `/peer-ai codex review last 2 commits` from 
 These aren't nice-to-haves — they're baked into every skill template so the source AI respects them.
 
 - **Read-only sandbox on peer Codex.** Never downgrade below `--sandbox read-only`. The peer reviews, it doesn't write.
-- **Bounded rounds.** N per target per session (default 5, configurable), enforced by native hooks on all 3 CLIs (`PreToolUse` on Claude/Codex, `BeforeTool` on Gemini). Prevents infinite ping-pong when two models disagree. See "Managing the cap" below.
+- **Bounded rounds.** N per target per **exchange chain** (default 5, configurable), enforced by native hooks on all 3 CLIs (`PreToolUse` on Claude/Codex, `BeforeTool` on Gemini). The cap targets infinite ping-pong on a single dialogue, not a global per-session quota — each target has its own counter that auto-resets after inactivity. See "Managing the cap" below.
 - **No secrets leakage.** Briefs are scrubbed for env vars, API keys, tokens before being sent to a peer.
 - **Prompt injection defense.** When a brief includes LLM prompts (e.g. reviewing a prompt template file), they're wrapped in `<user_content>...</user_content>` XML delimiters so the peer parses them as data, not instructions.
 - **No delegated understanding.** The peer reviews and reports. The source AI synthesizes and decides. Skills are written to refuse "based on your findings, fix it" style delegation.
 
 ## Managing the cap
 
-The per-session consultation cap (default 5 per target) is enforced by a native hook on each CLI, backed by a shared guard script at `~/.peer-ai/guard.js`. You can tweak or override it at three levels:
+The per-exchange-chain consultation cap (default 5 per target) is enforced by a native hook on each CLI, backed by a shared guard script at `~/.peer-ai/guard.js`. The cap is **per dialogue**, not per CLI session: each target accumulates rounds independently, and a target's counter auto-resets after `ttl_minutes` of inactivity for that target (default 30). This means:
+
+- A real back-and-forth ping-pong (5 rapid rounds in a few minutes) is bounded.
+- A new consultation 30+ minutes later starts a fresh chain — counter back to 0.
+- Different targets are independent: codex at 5/5 doesn't block gemini.
+- **`/clear` does NOT reset the counter.** The guard runs out-of-process via the CLI's PreToolUse/BeforeTool hook and cannot detect Claude/Codex/Gemini session boundaries. To start a fresh chain immediately, use `npx @pilosite/peer-ai@latest reset [target]`.
+
+You can tweak or override the cap at four levels:
 
 ### Change it permanently
 
@@ -131,7 +138,7 @@ npx @pilosite/peer-ai@latest reset            # all targets
 npx @pilosite/peer-ai@latest reset codex      # only codex
 ```
 
-Wipes the round counter in `~/.peer-ai/rounds.json` without touching the cap. The cap stays at whatever it is; you just start over from zero for that session.
+Wipes the chain counter in `~/.peer-ai/rounds.json` without touching the cap. The cap stays at whatever it is; the targeted chain restarts from zero. Use this when you want to start a fresh dialogue with a peer immediately, without waiting for the inactivity TTL to elapse — especially useful after `/clear`, since `/clear` itself does not reset the counter.
 
 ### Check where you are
 
@@ -139,14 +146,15 @@ Wipes the round counter in `~/.peer-ai/rounds.json` without touching the cap. Th
 npx @pilosite/peer-ai@latest status
 ```
 
-Shows current cap, per-target usage, time since last activity, and when the session will auto-reset. If any target is at the cap, it's marked in red as `BLOCKED`.
+Shows current cap, per-target usage, time since last activity for each chain, and when each chain will auto-reset. If any target is at the cap, it's marked in red as `BLOCKED`.
 
 ### Auto-reset
 
-Sessions automatically reset after **60 minutes of inactivity** by default. That TTL is also configurable:
+Each target's chain automatically resets after **30 minutes of inactivity for that target** by default. Other targets' chains are untouched — the TTL is per-target, not global. The TTL is configurable:
 
 ```bash
-npx @pilosite/peer-ai@latest config set ttl_minutes 30
+npx @pilosite/peer-ai@latest config set ttl_minutes 15   # tighter — chain dies faster
+npx @pilosite/peer-ai@latest config set ttl_minutes 60   # looser — longer dialogues
 ```
 
 ### Disable the hard block
@@ -238,11 +246,11 @@ OTHER
 
 ### Do the AIs actually talk to each other, or is it just one-shot?
 
-One-shot by default — the peer CLI is invoked in non-interactive mode, answers once, exits. Follow-up rounds are supported up to 5 per target per session (soft counter). Beyond that, the skill refuses and suggests `/clear` or switching targets. This is deliberately conservative — the goal is "second opinion", not "long AI-to-AI conversation".
+One-shot by default — the peer CLI is invoked in non-interactive mode, answers once, exits. Follow-up rounds are supported up to 5 per target per **exchange chain** (auto-resets after 30 min of inactivity for that target). Beyond that, the guard hard-blocks until the chain TTL elapses, you reset manually (`npx @pilosite/peer-ai@latest reset <target>`), or you switch targets. This is deliberately conservative — the goal is "second opinion", not "long AI-to-AI conversation".
 
 ### Is it expensive?
 
-Each consultation is one LLM call on the peer side. A review of ~2 commits typically generates a ~3-5k token brief and ~500-1000 token response. For Claude, Codex, and Gemini, that's a few cents per consultation. The 5-rounds-per-session budget exists partly to bound cost, partly to bound noise.
+Each consultation is one LLM call on the peer side. A review of ~2 commits typically generates a ~3-5k token brief and ~500-1000 token response. For Claude, Codex, and Gemini, that's a few cents per consultation. The 5-rounds-per-chain budget exists partly to bound cost, partly to bound noise.
 
 ### Why not just copy-paste into the other CLI myself?
 
@@ -278,7 +286,7 @@ The installer is idempotent — re-running updates the skills in place with the 
 
 ### Contributions welcome?
 
-Yes — issues, PRs, new AI targets, template improvements. Start with `npm run test` (coming soon), then open a PR against `main`.
+Yes — issues, PRs, new AI targets, template improvements. Start with `npm test` (Node-only, zero deps — exercises the guard's chain TTL semantics), then open a PR against `main`.
 
 ## Credits
 
