@@ -1,9 +1,12 @@
 {
   "name": "@pilosite/peer-ai",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "AI-to-AI peer consultation — install symmetric skills in Claude Code, Codex CLI, and Gemini CLI so any AI can ask any other AI for a second opinion, code review, or deep analysis.",
   "bin": {
     "peer-ai": "bin/install.js"
+  },
+  "scripts": {
+    "test": "node test/guard.test.js"
   },
   "files": [
     "bin",

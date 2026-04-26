@@ -5,6 +5,45 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.2.1] — Per-exchange-chain cap (bug fix)
+
+### Fixed
+- **Counter no longer accumulates silently across CLI sessions / `/clear` cycles.** The
+  v0.2.0 cap was effectively a global per-target counter with a single 60-min TTL: a
+  user could `/clear`, start fresh, and immediately hit a "5/5 reached" block from
+  rounds accumulated in prior sessions. The cap is now interpreted as **per
+  exchange chain**, not per CLI session — its true intent.
+- **Per-target `last_activity` timestamps.** Previously a single global
+  `last_activity` field meant codex activity refreshed gemini's TTL (and vice
+  versa). Now each target ages independently: a stale codex chain auto-resets
+  without disturbing an active gemini chain.
+- **`ttl_minutes` default lowered from 60 to 30.** A real exchange chain (rapid
+  back-and-forth) finishes within minutes; 30 min is a generous safety margin
+  before the next call is treated as a fresh dialogue.
+
+### Changed
+- `~/.peer-ai/rounds.json` schema migrated from
+  `{ rounds: { codex: 2 }, last_activity: "..." }` to
+  `{ chains: { codex: { count: 2, last_activity: "..." } } }`. The guard reads
+  the legacy shape transparently and rewrites it on the next allow-decision —
+  no manual migration needed.
+- All template skill files (Claude / Codex / Gemini) and `CLAUDE.md` /
+  `AGENTS.md` / `GEMINI.md` instructions blocks updated to describe the cap as
+  "per exchange chain" and to clarify that `/clear` does NOT reset the counter
+  (use `npx @pilosite/peer-ai@latest reset <target>` for an immediate reset).
+- `peer-ai status` now displays per-chain age and per-chain auto-reset countdown
+  for each target, instead of a single global "last activity" line.
+
+### Added
+- `npm test` — zero-dependency Node test suite at `test/guard.test.js` covering
+  rapid-cap blocking, per-target TTL expiry, per-target isolation, legacy-schema
+  migration, env-var override, and hard_block toggle.
+
+### Migration
+- No action required. Existing `~/.peer-ai/rounds.json` files are auto-migrated
+  on the next guard invocation. Existing `~/.peer-ai/config.json` keeps any
+  `ttl_minutes` you explicitly set; only the unset default changes.
+
 ## [0.2.0] — Hard-block hooks + runtime config
 
 ### Added
