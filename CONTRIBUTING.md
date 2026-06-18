@@ -29,10 +29,10 @@ To support a new AI CLI (e.g. Cursor, Windsurf, Qwen Code):
    - `instructionsPath(scope, cwd)` — the corresponding CLAUDE.md-equivalent
    - `templateDir` — subdirectory name under `templates/`
    - `writer` — function that renders and writes the skill
-2. **Write a writer function** (similar to `writeClaudeSkill`, `writeCodexSkill`, `writeGeminiExtension`) and a writer wire-up below.
+2. **Write a writer function** (similar to `writeClaudeSkill`, `writeCodexSkill`, `writeAntigravityExtension`) and a writer wire-up below.
 3. **Add templates** under `templates/<new-ai>/`. At minimum:
    - One primary skill file template (e.g. `SKILL.md.tmpl`)
-   - Any per-target sub-templates if the AI's format is one-file-per-target (like Gemini)
+   - Any per-target sub-templates if the AI's format is one-file-per-target (like Antigravity's extension)
 4. **Update the label map** in `renderTemplate()` (`const labels = ...`).
 5. **Update `printUsageHint`** to document the new AI's invocation syntax.
 6. **Add a flag** (`--new-ai`) near the top of the args parser and thread it through `runInstall`.

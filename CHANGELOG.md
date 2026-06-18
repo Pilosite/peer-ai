@@ -5,6 +5,41 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-06-18 — Antigravity CLI replaces Gemini CLI
+
+Replace Gemini CLI peer with Antigravity CLI (agy) — gemini-cli sunset by Google for AI Pro/Ultra on 2026-06-18.
+
+### Changed
+- **The `gemini` peer is replaced by `antigravity` (binary `agy`).** Google sunsets
+  Gemini CLI for AI Pro/Ultra users on 2026-06-18; Antigravity CLI (`agy`) is its
+  successor. This is a clean replace, not a deprecated alias — gemini-cli is gone for
+  the affected tiers, so pointing users at it would be a dead end.
+- **Detection:** the installer now probes `which agy` instead of `which gemini`.
+- **Invocation:** the peer is now called as `agy -p "$(cat "$BRIEF")" --dangerously-skip-permissions`
+  (prompt is the `-p`/`--print` flag value, NOT stdin as gemini-cli used). The guard's
+  target regex matches `agy -p` / `--print` / `--prompt`.
+- **Peer label:** "Gemini CLI (Google)" → "Antigravity CLI (agy, Google)". User-facing
+  command is now `/peer-ai antigravity <question>` (was `/peer-ai gemini`).
+- **Config surface unchanged.** Antigravity reuses Gemini CLI's `~/.gemini` directory:
+  extension at `~/.gemini/extensions/peer-ai/` (manifest stays `gemini-extension.json`),
+  instructions in `GEMINI.md`, hook under `BeforeTool` + `run_shell_command` in
+  `~/.gemini/settings.json`. So existing installs upgrade in place.
+- Templates moved from `templates/gemini/` to `templates/antigravity/`; the renderer
+  label map, writer (`writeAntigravityExtension`), and hook writer
+  (`writeAntigravityHook`) renamed accordingly.
+
+### Added
+- `--antigravity` install flag (the canonical source flag for the Antigravity peer).
+- Guard test asserting `agy -p` is detected and capped like any other target.
+
+### Compatibility
+- The `--gemini` flag is kept as a **backward-compat alias** for `--antigravity` so
+  existing scripts and muscle memory don't break — it now installs the Antigravity peer.
+- Note: this version intentionally does NOT pass `--output-format json` to `agy`. Some
+  `agy` builds advertise it, but installed releases (e.g. 1.0.9) reject the flag with
+  "flag provided but not defined". The plain `-p` form returns clean stdout; the skill
+  templates note the JSON-envelope option for builds that support it.
+
 ## [0.2.1] — Per-exchange-chain cap (bug fix)
 
 ### Fixed

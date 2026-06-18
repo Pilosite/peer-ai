@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * peer-ai guard — hook handler shared by Claude Code, Codex CLI, and Gemini CLI.
+ * peer-ai guard — hook handler shared by Claude Code, Codex CLI, and Antigravity CLI.
  *
  * Invoked by each CLI's PreToolUse / BeforeTool hook. Reads the tool call
  * payload on stdin, decides whether the call is a peer-ai consultation (by
@@ -20,7 +20,7 @@
  * (default 30). The intent is to prevent infinite ping-pong on a single
  * dialogue — once the back-and-forth pauses for >ttl_minutes, the next call
  * starts a fresh chain. This is independent of `/clear`, new shells, or
- * Claude/Codex/Gemini session boundaries (which the guard cannot detect).
+ * Claude/Codex/Antigravity session boundaries (which the guard cannot detect).
  *
  * Debug: set PEER_AI_DEBUG=1 to log decisions to ~/.peer-ai/guard.log
  */
@@ -48,7 +48,9 @@ const DEFAULT_CONFIG = {
 const TARGET_PATTERNS = {
   codex: /\bcodex\s+exec\b/,
   claude: /\bclaude\s+-p\b/,
-  gemini: /\bgemini\s*(?:<|--prompt|\s-p\b)/,
+  // Antigravity (agy) is the Gemini CLI successor: `agy -p "<prompt>"`
+  // (also accepts --print / --prompt). The prompt is the flag value, not stdin.
+  antigravity: /\bagy\s+(?:-p\b|--print\b|--prompt\b)/,
 };
 
 // -------- Main --------
@@ -131,7 +133,7 @@ function readStdinJson() {
  *
  * Claude Code:  { tool_input: { command: "..." } }
  * Codex CLI:    { tool_input: { command: "..." } }  (same shape)
- * Gemini CLI:   { tool_input: { command: "..." } }  (verified during install)
+ * Antigravity CLI: { tool_input: { command: "..." } }  (inherits Gemini CLI hook schema)
  *
  * Fallback: if the payload has a top-level `command` field we use it.
  */
@@ -190,7 +192,7 @@ function loadConfig() {
  * the next saveRounds() call writes the new shape to disk.
  *
  * Only the entry for `target` is TTL-checked here — other targets' chains are
- * preserved as-is so we don't reset, e.g., gemini's counter when a codex chain
+ * preserved as-is so we don't reset, e.g., antigravity's counter when a codex chain
  * times out. Each target ages independently.
  */
 function loadRounds(ttlMinutes, target) {

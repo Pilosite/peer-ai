@@ -9,7 +9,7 @@
  *   1. Five rapid invocations against the same target → 5th allowed, 6th blocked.
  *   2. Five invocations spread with the chain TTL exceeded between each → all
  *      allowed (each one starts a fresh chain because the prior chain expired).
- *   3. Per-target isolation: codex chain at the cap does NOT block gemini.
+ *   3. Per-target isolation: codex chain at the cap does NOT block antigravity.
  *   4. Legacy rounds.json shape ({rounds, last_activity}) is migrated on read.
  *   5. Old chain entry (last_activity beyond TTL) is auto-cleared before count check.
  */
@@ -58,9 +58,9 @@ function readRounds(home) {
  */
 function runGuard(home, target) {
   const cmds = {
-    codex:  'codex exec --sandbox read-only --skip-git-repo-check - < /tmp/brief',
-    claude: 'claude -p "$(cat /tmp/brief)"',
-    gemini: 'gemini < /tmp/brief',
+    codex:       'codex exec --sandbox read-only --skip-git-repo-check - < /tmp/brief',
+    claude:      'claude -p "$(cat /tmp/brief)"',
+    antigravity: 'agy -p "$(cat /tmp/brief)" --dangerously-skip-permissions',
   };
   const payload = JSON.stringify({ tool_input: { command: cmds[target] } });
 
@@ -110,6 +110,17 @@ test('5 rapid invocations against same target: 5th allowed, 6th blocked', (home)
   assert.match(r6.stderr, /exchange chain/i, 'block message should mention exchange chain (not session)');
 });
 
+test('antigravity (agy -p) is detected and capped like any other target', (home) => {
+  writeConfig(home, { max_rounds: 5, ttl_minutes: 30, hard_block: true });
+  for (let i = 1; i <= 5; i++) {
+    const r = runGuard(home, 'antigravity');
+    assert.strictEqual(r.code, 0, `call #${i} should be allowed (got code ${r.code}, stderr: ${r.stderr})`);
+  }
+  const r6 = runGuard(home, 'antigravity');
+  assert.strictEqual(r6.code, 2, `call #6 should be blocked (got code ${r6.code})`);
+  assert.match(r6.stderr, /for antigravity/i, 'block message should name the antigravity target');
+});
+
 test('chain TTL expired for a target: counter auto-resets, fresh call allowed', (home) => {
   writeConfig(home, { max_rounds: 5, ttl_minutes: 30, hard_block: true });
   // Pre-seed: codex chain at the cap, but last_activity is 31 min ago.
@@ -135,7 +146,7 @@ test('chain still active (TTL not expired): counter is preserved, blocks at cap'
   assert.strictEqual(r.code, 2, `active-chain at cap should block (got code ${r.code})`);
 });
 
-test('per-target isolation: codex at cap does NOT block gemini', (home) => {
+test('per-target isolation: codex at cap does NOT block antigravity', (home) => {
   writeConfig(home, { max_rounds: 5, ttl_minutes: 30, hard_block: true });
   const recentTs = new Date(Date.now() - 5 * 60 * 1000).toISOString();
   writeRoundsRaw(home, JSON.stringify({
@@ -143,26 +154,26 @@ test('per-target isolation: codex at cap does NOT block gemini', (home) => {
   }));
   const rCodex = runGuard(home, 'codex');
   assert.strictEqual(rCodex.code, 2, 'codex should be blocked');
-  const rGemini = runGuard(home, 'gemini');
-  assert.strictEqual(rGemini.code, 0, `gemini should still be allowed (got code ${rGemini.code}, stderr: ${rGemini.stderr})`);
+  const rAntigravity = runGuard(home, 'antigravity');
+  assert.strictEqual(rAntigravity.code, 0, `antigravity should still be allowed (got code ${rAntigravity.code}, stderr: ${rAntigravity.stderr})`);
 });
 
-test('per-target TTL isolation: codex chain expires while gemini chain is still fresh', (home) => {
+test('per-target TTL isolation: codex chain expires while antigravity chain is still fresh', (home) => {
   writeConfig(home, { max_rounds: 5, ttl_minutes: 30, hard_block: true });
   const oldTs = new Date(Date.now() - 31 * 60 * 1000).toISOString();
   const recentTs = new Date(Date.now() - 5 * 60 * 1000).toISOString();
   writeRoundsRaw(home, JSON.stringify({
     chains: {
-      codex:  { count: 5, last_activity: oldTs },     // expired
-      gemini: { count: 4, last_activity: recentTs },  // still active
+      codex:       { count: 5, last_activity: oldTs },     // expired
+      antigravity: { count: 4, last_activity: recentTs },  // still active
     }
   }));
-  // Hitting codex should reset codex (TTL expired) AND preserve gemini state.
+  // Hitting codex should reset codex (TTL expired) AND preserve antigravity state.
   runGuard(home, 'codex');
   const state = readRounds(home);
   assert.strictEqual(state.chains.codex.count, 1, 'codex should be reset to 1');
-  assert.strictEqual(state.chains.gemini.count, 4, `gemini count should be preserved at 4, got ${state.chains.gemini.count}`);
-  assert.strictEqual(state.chains.gemini.last_activity, recentTs, 'gemini last_activity should be preserved');
+  assert.strictEqual(state.chains.antigravity.count, 4, `antigravity count should be preserved at 4, got ${state.chains.antigravity.count}`);
+  assert.strictEqual(state.chains.antigravity.last_activity, recentTs, 'antigravity last_activity should be preserved');
 });
 
 test('legacy rounds.json shape is migrated on read', (home) => {

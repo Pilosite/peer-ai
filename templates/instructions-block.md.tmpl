@@ -4,7 +4,7 @@
 This repository has the **peer-ai** skill installed. You can consult another installed AI CLI ({{targets_list}}) for a second opinion, code review, or deep analysis.
 
 **When to use peer-ai:**
-- User explicitly asks for a peer review ("check with codex", "ask claude", "demande à gemini")
+- User explicitly asks for a peer review ("check with codex", "ask claude", "demande à antigravity")
 - You want independent validation from a different model family on a tricky call
 - Heavy analysis that would blow your own context budget — delegate to a fresh CLI session
 
@@ -20,8 +20,8 @@ This repository has the **peer-ai** skill installed. You can consult another ins
 {{#if_target codex}}
 - To consult Codex: `/peer-ai codex <question>` (Claude Code) or call `codex exec --sandbox read-only` directly
 {{/if_target}}
-{{#if_target gemini}}
-- To consult Gemini: `/peer-ai gemini <question>` (Claude Code) or `/peer-ai:gemini <question>` (Gemini CLI) or call `gemini < brief.md` directly
+{{#if_target antigravity}}
+- To consult Antigravity: `/peer-ai antigravity <question>` (Claude Code) or `/peer-ai:antigravity <question>` (Antigravity CLI) or call `agy -p "$(cat brief.md)" --dangerously-skip-permissions` directly
 {{/if_target}}
 
 **Guardrails (non-negotiable):**

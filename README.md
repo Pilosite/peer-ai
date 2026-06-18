@@ -1,6 +1,6 @@
 # peer-ai
 
-> **AI-to-AI peer consultation.** Let Claude Code, Codex CLI, and Gemini CLI ask each other for a second opinion, code review, or deep analysis — with one command.
+> **AI-to-AI peer consultation.** Let Claude Code, Codex CLI, and Antigravity CLI (agy) ask each other for a second opinion, code review, or deep analysis — with one command.
 
 [![npm version](https://img.shields.io/npm/v/@pilosite/peer-ai.svg)](https://www.npmjs.com/package/@pilosite/peer-ai)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -10,7 +10,7 @@
 
 ## Why
 
-You're using Claude Code. You reach a conclusion that feels load-bearing — a security-sensitive fix, an architecture call, a regex nobody understands. Before you ship it, you want a **second opinion from a different model family**: Codex for typed-language rigor, Gemini for a fresh perspective, another Claude session for independent validation.
+You're using Claude Code. You reach a conclusion that feels load-bearing — a security-sensitive fix, an architecture call, a regex nobody understands. Before you ship it, you want a **second opinion from a different model family**: Codex for typed-language rigor, Antigravity (Google) for a fresh perspective, another Claude session for independent validation.
 
 Today you'd open another terminal, copy-paste the diff, write a brief, paste the response back. Multiply by 10 reviews a week.
 
@@ -19,7 +19,7 @@ Today you'd open another terminal, copy-paste the diff, write a brief, paste the
 ```
 /peer-ai codex review the last 2 commits
 /peer-ai claude second opinion on this auth flow
-/peer-ai gemini what's wrong with this SQL
+/peer-ai antigravity what's wrong with this SQL
 ```
 
 The source AI assembles a smart brief (diff, relevant files, your question), calls the target CLI in read-only mode, and relays the response verbatim. Bounded to **5 rounds per target per exchange chain** so you don't get stuck in an AI-to-AI loop. The cap is per-dialogue (auto-resets after 30 min of inactivity for that target), not per CLI session — see [Managing the cap](#managing-the-cap) for details.
@@ -32,9 +32,11 @@ peer-ai is a **Node zero-dependency installer** that scaffolds one skill file pe
 | -------------- | --------------------------------------------------- | ----------------------- |
 | **Claude Code**| `~/.claude/commands/peer-ai.md` (slash command)     | `/peer-ai <target> ...` |
 | **Codex CLI**  | `~/.codex/skills/peer-ai/SKILL.md` (auto-discovered)| "ask claude", "second opinion" |
-| **Gemini CLI** | `~/.gemini/extensions/peer-ai/` (extension)         | `/peer-ai:<target> ...` |
+| **Antigravity CLI** (`agy`) | `~/.gemini/extensions/peer-ai/` (extension)         | `/peer-ai:<target> ...` |
 
-The installer is **dynamic** — only the targets you select appear in the rendered skills. Install Claude Code + Codex only? Neither skill will mention Gemini. Add Gemini later? Re-run `npx @pilosite/peer-ai@latest` and it updates in place.
+> **Antigravity CLI** (binary `agy`) is the successor to the now-sunset Gemini CLI (Google ended Gemini CLI for AI Pro/Ultra on 2026-06-18). It reuses the same `~/.gemini` config surface (extensions dir, `GEMINI.md`, `settings.json`, the `BeforeTool` hook), so peer-ai installs there.
+
+The installer is **dynamic** — only the targets you select appear in the rendered skills. Install Claude Code + Codex only? Neither skill will mention Antigravity. Add Antigravity later? Re-run `npx @pilosite/peer-ai@latest` and it updates in place.
 
 ## Quick start
 
@@ -68,12 +70,12 @@ npx @pilosite/peer-ai@latest --uninstall
 
 When you run `npx @pilosite/peer-ai@latest`:
 
-1. **Detect.** `which claude`, `which codex`, `which gemini` — list what's on the machine.
+1. **Detect.** `which claude`, `which codex`, `which agy` — list what's on the machine.
 2. **Scope.** User-level (`~/.claude/...`) or project-level (`./.claude/...`)? Interactive unless `--global` / `--local`.
 3. **Sources.** Which AIs should have peer-ai installed? Any AI you select becomes capable of initiating a consultation.
-4. **Targets per source.** For each source, which other AIs can it consult? You can pick a partial matrix — e.g. Claude Code calls Codex only, Gemini calls both.
+4. **Targets per source.** For each source, which other AIs can it consult? You can pick a partial matrix — e.g. Claude Code calls Codex only, Antigravity calls both.
 5. **Plan preview.** Shows exactly what will be written where.
-6. **Instructions files (opt-in).** Optionally adds a short block to `CLAUDE.md` (for Claude Code), `AGENTS.md` (for Codex), `GEMINI.md` (for Gemini) so the model knows the skill exists and when to use it. Bracketed with HTML markers so re-runs update in place cleanly.
+6. **Instructions files (opt-in).** Optionally adds a short block to `CLAUDE.md` (for Claude Code), `AGENTS.md` (for Codex), `GEMINI.md` (for Antigravity — `agy` reads `GEMINI.md`) so the model knows the skill exists and when to use it. Bracketed with HTML markers so re-runs update in place cleanly.
 7. **Write & confirm.** Templates are rendered with your target matrix substituted, files written atomically.
 
 ### At runtime
@@ -86,18 +88,18 @@ When you invoke the skill (example: `/peer-ai codex review last 2 commits` from 
 4. **Smart context.** The source AI decides what to include in the brief based on the question: diff for "review", specific files for "look at X", architecture docs for "design", error logs for "debug". Deliberately capped around 5000 tokens unless you explicitly ask for deep review.
 5. **Invoke.** Writes brief to a temp file, calls the target CLI in its non-interactive / read-only mode:
    - **Codex:** `codex exec --sandbox read-only --skip-git-repo-check --output-last-message "$OUT" --color never - < "$BRIEF"`
-   - **Gemini:** `gemini < "$BRIEF" > "$OUT"`
+   - **Antigravity:** `agy -p "$(cat "$BRIEF")" --dangerously-skip-permissions > "$OUT"` (prompt is the `-p` flag value, not stdin)
    - **Claude:** `claude -p "$(cat "$BRIEF")" > "$OUT"` (fresh session, zero prior context)
 6. **Relay.** Presents the response **verbatim** under a clear heading. No paraphrasing — you see what the peer actually said.
 7. **History (optional).** For non-trivial consultations, asks if you want to keep a trace under `~/.<cli>/peer-ai-history/YYYY-MM-DD-HHMM-<target>.md`.
-8. **Follow-up offer.** One opportunity to ask a follow-up, then stops. Codex supports native session resume; Claude and Gemini re-include prior exchange as context in a new brief.
+8. **Follow-up offer.** One opportunity to ask a follow-up, then stops. Codex and Antigravity (`agy -c`/`--continue`) support native session resume; Claude re-includes prior exchange as context in a new brief.
 
 ### Guardrails
 
 These aren't nice-to-haves — they're baked into every skill template so the source AI respects them.
 
 - **Read-only sandbox on peer Codex.** Never downgrade below `--sandbox read-only`. The peer reviews, it doesn't write.
-- **Bounded rounds.** N per target per **exchange chain** (default 5, configurable), enforced by native hooks on all 3 CLIs (`PreToolUse` on Claude/Codex, `BeforeTool` on Gemini). The cap targets infinite ping-pong on a single dialogue, not a global per-session quota — each target has its own counter that auto-resets after inactivity. See "Managing the cap" below.
+- **Bounded rounds.** N per target per **exchange chain** (default 5, configurable), enforced by native hooks on all 3 CLIs (`PreToolUse` on Claude/Codex, `BeforeTool` on Antigravity). The cap targets infinite ping-pong on a single dialogue, not a global per-session quota — each target has its own counter that auto-resets after inactivity. See "Managing the cap" below.
 - **No secrets leakage.** Briefs are scrubbed for env vars, API keys, tokens before being sent to a peer.
 - **Prompt injection defense.** When a brief includes LLM prompts (e.g. reviewing a prompt template file), they're wrapped in `<user_content>...</user_content>` XML delimiters so the peer parses them as data, not instructions.
 - **No delegated understanding.** The peer reviews and reports. The source AI synthesizes and decides. Skills are written to refuse "based on your findings, fix it" style delegation.
@@ -108,8 +110,8 @@ The per-exchange-chain consultation cap (default 5 per target) is enforced by a 
 
 - A real back-and-forth ping-pong (5 rapid rounds in a few minutes) is bounded.
 - A new consultation 30+ minutes later starts a fresh chain — counter back to 0.
-- Different targets are independent: codex at 5/5 doesn't block gemini.
-- **`/clear` does NOT reset the counter.** The guard runs out-of-process via the CLI's PreToolUse/BeforeTool hook and cannot detect Claude/Codex/Gemini session boundaries. To start a fresh chain immediately, use `npx @pilosite/peer-ai@latest reset [target]`.
+- Different targets are independent: codex at 5/5 doesn't block antigravity.
+- **`/clear` does NOT reset the counter.** The guard runs out-of-process via the CLI's PreToolUse/BeforeTool hook and cannot detect Claude/Codex/Antigravity session boundaries. To start a fresh chain immediately, use `npx @pilosite/peer-ai@latest reset [target]`.
 
 You can tweak or override the cap at four levels:
 
@@ -227,7 +229,7 @@ SCOPE
 SOURCES
       --claude          Install peer-ai in Claude Code (must be detected)
       --codex           Install peer-ai in Codex CLI
-      --gemini          Install peer-ai in Gemini CLI
+      --antigravity     Install peer-ai in Antigravity CLI (agy) [alias: --gemini]
       --all             Install in all detected sources
 
 INSTRUCTIONS FILES
@@ -250,7 +252,7 @@ One-shot by default — the peer CLI is invoked in non-interactive mode, answers
 
 ### Is it expensive?
 
-Each consultation is one LLM call on the peer side. A review of ~2 commits typically generates a ~3-5k token brief and ~500-1000 token response. For Claude, Codex, and Gemini, that's a few cents per consultation. The 5-rounds-per-chain budget exists partly to bound cost, partly to bound noise.
+Each consultation is one LLM call on the peer side. A review of ~2 commits typically generates a ~3-5k token brief and ~500-1000 token response. For Claude, Codex, and Antigravity, that's a few cents per consultation. The 5-rounds-per-chain budget exists partly to bound cost, partly to bound noise.
 
 ### Why not just copy-paste into the other CLI myself?
 
@@ -270,7 +272,7 @@ Yes, but you'll need to fork. The installer `AIS` registry (in `bin/install.js`)
 
 ### Is my data sent to a cloud when peer-ai runs?
 
-peer-ai itself is just a Node installer — it doesn't touch any network. At runtime, the source AI calls the **target CLI** directly on your machine, and that target CLI may make its own API calls per its own config (Claude→Anthropic, Codex→OpenAI, Gemini→Google). peer-ai adds no telemetry, no middleman, no extra network hop.
+peer-ai itself is just a Node installer — it doesn't touch any network. At runtime, the source AI calls the **target CLI** directly on your machine, and that target CLI may make its own API calls per its own config (Claude→Anthropic, Codex→OpenAI, Antigravity→Google). peer-ai adds no telemetry, no middleman, no extra network hop.
 
 ### Can I use peer-ai in an air-gapped environment?
 
@@ -291,7 +293,7 @@ Yes — issues, PRs, new AI targets, template improvements. Start with `npm test
 ## Credits
 
 - Installer pattern inspired by [get-shit-done-cc](https://github.com/gsd-build/get-shit-done), which pioneered the "one install script, many AI CLI integrations" approach.
-- Huge thanks to the teams at Anthropic (Claude Code), OpenAI (Codex CLI), and Google (Gemini CLI) for shipping tools that make this kind of interop possible.
+- Huge thanks to the teams at Anthropic (Claude Code), OpenAI (Codex CLI), and Google (Antigravity CLI, the Gemini CLI successor) for shipping tools that make this kind of interop possible.
 
 ## License
 

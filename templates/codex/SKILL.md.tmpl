@@ -1,6 +1,6 @@
 ---
 name: peer-ai
-description: Ask another installed AI CLI ({{targets_list}}) for a second opinion, peer review, or deep analysis. Auto-detects available CLIs, smart-assembles context, supports bounded follow-ups. Use when the user explicitly requests a peer consultation ("ask claude", "demande à gemini", "second opinion on X"). Installed by peer-ai v{{version}}.
+description: Ask another installed AI CLI ({{targets_list}}) for a second opinion, peer review, or deep analysis. Auto-detects available CLIs, smart-assembles context, supports bounded follow-ups. Use when the user explicitly requests a peer consultation ("ask claude", "demande à antigravity", "second opinion on X"). Installed by peer-ai v{{version}}.
 metadata:
   short-description: AI-to-AI peer consultation gateway
 ---
@@ -11,7 +11,7 @@ Delegate a question, review, or second-opinion request to another installed AI C
 
 ## When to use
 
-- User explicitly asks for a peer review ("check with claude", "demande à gemini ce qu'il en pense")
+- User explicitly asks for a peer review ("check with claude", "demande à antigravity ce qu'il en pense")
 - You reached a conclusion and want independent validation from a different model family
 - Heavy analysis that would blow your own context (long files, large diffs) — delegate to a fresh CLI session
 - Cross-checking architectural decisions where model diversity helps
@@ -98,12 +98,12 @@ claude -p "$(cat "$BRIEF")" > "$OUT"
 Notes: `-p` is print mode. The spawned Claude has zero access to your current session — inline all context.
 
 {{/if_target}}
-{{#if_target gemini}}
-**Gemini invocation:**
+{{#if_target antigravity}}
+**Antigravity invocation:**
 ```bash
-gemini < "$BRIEF" > "$OUT"
+agy -p "$(cat "$BRIEF")" --dangerously-skip-permissions > "$OUT"
 ```
-Notes: Gemini is one-shot when fed stdin. Read-only unless you pass `--approval-mode yolo` (don't).
+Notes: `agy` (Antigravity CLI, the Gemini CLI successor) takes the prompt as the value of `-p`/`--print` (NOT stdin). `--dangerously-skip-permissions` auto-approves tool prompts so it doesn't hang non-interactively. Verify `$OUT` is non-empty (non-TTY runs can return a false-empty with exit 0; re-run if blank).
 
 {{/if_target}}
 {{#if_target codex}}
@@ -162,7 +162,8 @@ Follow up with <target>, or stop here?
 ```
 
 If follow-up:
-- **Claude / Gemini**: no native session resume in one-shot mode. Re-include the previous exchange as context: `Previous round: <Q> → <A>. Now: <new Q>.`
+- **Claude**: no native one-shot resume. Re-include the previous exchange as context: `Previous round: <Q> → <A>. Now: <new Q>.`
+- **Antigravity (agy)**: resume natively with `agy -c`/`--continue`, or re-include prior context as above.
 - **Codex** (if supported): `codex exec resume --last --sandbox read-only --output-last-message <new> - < <new-brief>`
 
 Warn before exceeding {{max_rounds}} rounds.
@@ -185,4 +186,4 @@ Warn before exceeding {{max_rounds}} rounds.
 
 - Not auto-invoked. User must explicitly ask for a peer consultation.
 - The hook-based hard-block counter persists in `~/.peer-ai/rounds.json` per-target / per-exchange-chain (auto-resets after `ttl_minutes` of inactivity for that target — default 30). It is independent of Codex session boundaries: `/clear` does NOT reset it. Use `npx @pilosite/peer-ai@latest reset <target>` to start a fresh chain immediately. The soft self-check in this skill is a defense-in-depth layer for environments where the hook isn't installed.
-- Symmetric skill: Claude Code and Gemini CLI have equivalent peer-ai installations. See https://github.com/Pilosite/peer-ai.
+- Symmetric skill: Claude Code and Antigravity CLI have equivalent peer-ai installations. See https://github.com/Pilosite/peer-ai.

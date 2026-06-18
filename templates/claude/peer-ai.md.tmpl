@@ -18,7 +18,7 @@ Delegate a question, review, or second-opinion request to another installed AI C
 This is "AI-to-AI" consultation: you are Claude Code, and you're asking a peer model to weigh in on something — typically a code review, a design critique, a cross-check on your own conclusions, or a deep-dive that would be too expensive in your own context budget.
 
 **When to use:**
-- User explicitly asks for a peer review ("check with codex", "demande à gemini ce qu'il en pense")
+- User explicitly asks for a peer review ("check with codex", "demande à antigravity ce qu'il en pense")
 - You reached a conclusion and want independent validation from a different model family
 - Heavy analysis that would blow your context (long files, large diffs) — delegate to a fresh CLI session
 - Cross-checking architectural decisions where model diversity helps
@@ -146,12 +146,12 @@ codex exec --sandbox read-only --skip-git-repo-check --output-last-message "$OUT
 Notes: `--sandbox read-only` prevents Codex from editing files during review. `--output-last-message` captures the final answer cleanly (vs parsing stdout which is noisy). Reads brief from stdin via `-`.
 
 {{/if_target}}
-{{#if_target gemini}}
-**Gemini invocation:**
+{{#if_target antigravity}}
+**Antigravity invocation:**
 ```bash
-gemini < "$BRIEF" > "$OUT"
+agy -p "$(cat "$BRIEF")" --dangerously-skip-permissions > "$OUT"
 ```
-Notes: Gemini is one-shot when fed stdin. Read-only unless you pass `--approval-mode yolo` (do not). Verify output capture worked (some versions are noisy on stderr).
+Notes: `agy` (Antigravity CLI, the Gemini CLI successor) takes the prompt as the value of `-p`/`--print` (NOT stdin). `--dangerously-skip-permissions` auto-approves tool prompts so the run doesn't hang in non-interactive mode. In a non-TTY context the output can occasionally come back empty with exit 0 (a false-empty) — always verify `$OUT` is non-empty and re-run if blank. (Some `agy` builds support `--output-format json`; if yours does, prefer it and parse `.response` from the JSON envelope for a robust capture.)
 
 {{/if_target}}
 {{#if_target claude}}
@@ -212,11 +212,11 @@ If the user wants a follow-up:
 {{#if_target codex}}
 - For Codex: `codex exec resume --last --sandbox read-only --output-last-message <new-output> - < <new-brief>`
 {{/if_target}}
-{{#if_target gemini}}
-- For Gemini: currently no session resume in one-shot mode — you'll need to re-include the previous answer in the new brief as context
+{{#if_target antigravity}}
+- For Antigravity (agy): supports multi-turn resume via `agy -c`/`--continue` (continue the most recent conversation) or `--conversation <id>`. If you don't resume, re-include the previous answer in the new brief as context.
 {{/if_target}}
 {{#if_target claude}}
-- For Claude: same as Gemini — re-include prior context in new `-p` call
+- For Claude: no native one-shot resume — re-include prior context in new `-p` call
 {{/if_target}}
 
 Increment the round counter. If the next call would exceed 5, warn before proceeding.
@@ -250,6 +250,6 @@ Increment the round counter. If the next call would exceed 5, warn before procee
 <notes>
 - The skill is deliberately **not auto-invoked**. User must explicitly run `/peer-ai`. Claude should not silently consult peers without being asked.
 - The hook-based hard-block counter persists in `~/.peer-ai/rounds.json` and is per-target / per-exchange-chain (auto-resets after `ttl_minutes` of inactivity for that target — default 30). It is independent of Claude session boundaries: `/clear` does NOT reset it. To start a fresh chain immediately, use `npx @pilosite/peer-ai@latest reset <target>`. The soft self-check inside this skill is a defense-in-depth layer for environments where the hook isn't installed.
-- For Gemini and Claude follow-ups (which don't have native session resume), the skill re-includes the previous exchange as context in the new brief. State it explicitly: "Previous round: <Q> → <A>. Now: <new Q>."
-- This skill is part of the `peer-ai` family — symmetric skills exist for Codex CLI and Gemini CLI so peers can consult back. See https://github.com/Pilosite/peer-ai.
+- For Claude follow-ups (no native one-shot resume), the skill re-includes the previous exchange as context in the new brief. State it explicitly: "Previous round: <Q> → <A>. Now: <new Q>." Antigravity (agy) can instead resume natively with `-c`/`--continue`.
+- This skill is part of the `peer-ai` family — symmetric skills exist for Codex CLI and Antigravity CLI so peers can consult back. See https://github.com/Pilosite/peer-ai.
 </notes>

@@ -2,10 +2,14 @@
 /**
  * peer-ai installer
  *
- * Installs the peer-ai skill in Claude Code, Codex CLI, and/or Gemini CLI
+ * Installs the peer-ai skill in Claude Code, Codex CLI, and/or Antigravity CLI
  * with a target matrix picked by the user, a shared guard script for hard
  * enforcement of the per-exchange-chain consultation cap, and optional updates
  * to each CLI's instructions file (CLAUDE.md / AGENTS.md / GEMINI.md).
+ *
+ * Note: Antigravity CLI (binary `agy`) is the successor to the now-sunset
+ * Gemini CLI and reuses its ~/.gemini config surface (extensions dir,
+ * GEMINI.md, settings.json, BeforeTool/run_shell_command hook).
  *
  * Usage:
  *   npx @pilosite/peer-ai@latest                       # interactive install
@@ -101,10 +105,12 @@ const AIS = {
     hookWriter: writeCodexHook,
     hookRemover: removeCodexHook,
   },
-  gemini: {
-    label: 'Gemini CLI (Google)',
-    binary: 'gemini',
-    detect: () => which('gemini'),
+  antigravity: {
+    label: 'Antigravity CLI (agy, Google)',
+    binary: 'agy',
+    detect: () => which('agy'),
+    // Antigravity (agy) is the Gemini CLI successor and reuses the ~/.gemini
+    // config surface: extensions dir, GEMINI.md, settings.json, BeforeTool hook.
     installPath: (scope, cwd) =>
       scope === 'local'
         ? path.join(cwd, '.gemini', 'extensions', 'peer-ai')
@@ -117,10 +123,10 @@ const AIS = {
       scope === 'local'
         ? path.join(cwd, '.gemini', 'settings.json')
         : path.join(os.homedir(), '.gemini', 'settings.json'),
-    templateDir: 'gemini',
-    writer: writeGeminiExtension,
-    hookWriter: writeGeminiHook,
-    hookRemover: removeGeminiHook,
+    templateDir: 'antigravity',
+    writer: writeAntigravityExtension,
+    hookWriter: writeAntigravityHook,
+    hookRemover: removeAntigravityHook,
   },
 };
 
@@ -149,7 +155,7 @@ const hasHelp = argv.includes('--help') || argv.includes('-h');
 const hasYes = argv.includes('--yes') || argv.includes('-y');
 const hasClaude = argv.includes('--claude');
 const hasCodex = argv.includes('--codex');
-const hasGemini = argv.includes('--gemini');
+const hasAntigravity = argv.includes('--antigravity') || argv.includes('--gemini');
 const hasNoInstructions = argv.includes('--no-instructions');
 const hasInstructions = argv.includes('--instructions');
 const hasNoHooks = argv.includes('--no-hooks');
@@ -223,7 +229,7 @@ async function runInstall() {
 
   if (installedList.length === 0) {
     console.log(`${red}No supported AI CLIs detected.${reset}`);
-    console.log(`Install at least one of: claude, codex, gemini.`);
+    console.log(`Install at least one of: claude, codex, agy (Antigravity).`);
     process.exit(1);
   }
 
@@ -249,7 +255,7 @@ async function runInstall() {
     const flagged = [];
     if (hasClaude && detected.claude) flagged.push('claude');
     if (hasCodex && detected.codex) flagged.push('codex');
-    if (hasGemini && detected.gemini) flagged.push('gemini');
+    if (hasAntigravity && detected.antigravity) flagged.push('antigravity');
     if (flagged.length > 0) {
       sources = flagged;
     } else {
@@ -367,9 +373,9 @@ async function runInstall() {
           } else {
             console.log(`${dim}  → Remember to enable it later, or hooks will have no effect.${reset}`);
           }
-        } else if (result === 'gemini_warning') {
+        } else if (result === 'antigravity_warning') {
           console.log(`${green}✓${reset} Installed ${ai.label} hook -> ${dim}${ai.hookSettingsPath(scope, cwd)}${reset}`);
-          console.log(`${dim}  First invocation may show a Gemini security fingerprint warning — this is${reset}`);
+          console.log(`${dim}  First invocation may show an Antigravity security fingerprint warning — this is${reset}`);
           console.log(`${dim}  expected. Accept it to authorize peer-ai's guard script.${reset}`);
         } else {
           console.log(`${green}✓${reset} Installed ${ai.label} hook -> ${dim}${ai.hookSettingsPath(scope, cwd)}${reset}`);
@@ -627,7 +633,7 @@ async function runStatus() {
   console.log();
   console.log(`${dim}chains (per-target — each ages independently):${reset}`);
   const effectiveMax = parseInt(process.env.PEER_AI_MAX_ROUNDS || '', 10) || config.max_rounds;
-  const targets = ['claude', 'codex', 'gemini'];
+  const targets = ['claude', 'codex', 'antigravity'];
   const now = Date.now();
   for (const t of targets) {
     const entry = state.chains[t];
@@ -772,23 +778,25 @@ function writeCodexSkill({ installPath, targets, version, maxRounds }) {
   writeFileAtomic(installPath, rendered);
 }
 
-function writeGeminiExtension({ installPath, targets, version, maxRounds }) {
-  const extJson = readTemplate('gemini/gemini-extension.json.tmpl');
+function writeAntigravityExtension({ installPath, targets, version, maxRounds }) {
+  // Antigravity (agy) reads the Gemini CLI extension format, so the manifest
+  // filename stays `gemini-extension.json`.
+  const extJson = readTemplate('antigravity/gemini-extension.json.tmpl');
   writeFileAtomic(
     path.join(installPath, 'gemini-extension.json'),
     renderTemplate(extJson, { targets, version, maxRounds }),
   );
 
-  const listTmpl = readTemplate('gemini/commands/list.toml.tmpl');
+  const listTmpl = readTemplate('antigravity/commands/list.toml.tmpl');
   writeFileAtomic(
     path.join(installPath, 'commands', 'list.toml'),
     renderTemplate(listTmpl, { targets, version, maxRounds }),
   );
 
   for (const target of targets) {
-    const templatePath = `gemini/commands/${target}.toml.tmpl`;
+    const templatePath = `antigravity/commands/${target}.toml.tmpl`;
     if (!templateExists(templatePath)) {
-      console.warn(`${yellow}⚠${reset} No Gemini template for target "${target}", skipping`);
+      console.warn(`${yellow}⚠${reset} No Antigravity template for target "${target}", skipping`);
       continue;
     }
     const tmpl = readTemplate(templatePath);
@@ -860,19 +868,19 @@ function removeCodexHook({ scope, cwd }) {
   return true;
 }
 
-function writeGeminiHook({ scope, cwd }) {
-  const file = AIS.gemini.hookSettingsPath(scope, cwd);
+function writeAntigravityHook({ scope, cwd }) {
+  const file = AIS.antigravity.hookSettingsPath(scope, cwd);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const settings = readJsonSafe(file);
   settings.hooks = settings.hooks || {};
-  // Gemini uses BeforeTool + run_shell_command matcher
+  // Antigravity (agy) inherits the Gemini CLI hook schema: BeforeTool + run_shell_command matcher
   settings.hooks.BeforeTool = upsertHookMatcher(settings.hooks.BeforeTool || [], 'run_shell_command', PEER_AI_GUARD);
   fs.writeFileSync(file, JSON.stringify(settings, null, 2) + '\n', 'utf8');
-  return 'gemini_warning';
+  return 'antigravity_warning';
 }
 
-function removeGeminiHook({ scope, cwd }) {
-  const file = AIS.gemini.hookSettingsPath(scope, cwd);
+function removeAntigravityHook({ scope, cwd }) {
+  const file = AIS.antigravity.hookSettingsPath(scope, cwd);
   if (!fs.existsSync(file)) return false;
   const settings = readJsonSafe(file);
   if (!settings.hooks || !settings.hooks.BeforeTool) return false;
@@ -978,7 +986,7 @@ function renderTemplate(tmpl, ctx) {
   const labels = {
     claude: 'Claude Code',
     codex: 'Codex CLI (OpenAI)',
-    gemini: 'Gemini CLI (Google)',
+    antigravity: 'Antigravity CLI (agy, Google)',
   };
 
   let out = tmpl;
@@ -1061,6 +1069,7 @@ async function askScope() {
   console.log(`${bold}Install scope:${reset}`);
   console.log(`  1) global — install under your home directory (${dim}~/.claude, ~/.codex, ~/.gemini${reset})`);
   console.log(`  2) local  — install under the current project (${dim}./.claude, ./.codex, ./.gemini${reset})`);
+  // Note: Antigravity (agy) reuses the ~/.gemini config dir.
   const answer = await ask('Choose [1]: ');
   return answer === '2' ? 'local' : 'global';
 }
@@ -1143,9 +1152,9 @@ function printBanner() {
 function printHelp() {
   console.log(`${bold}peer-ai${reset} v${pkg.version}
 
-Install the peer-ai skill in Claude Code, Codex CLI, and/or Gemini CLI so any
-installed AI can ask any other installed AI for a second opinion, code review,
-or deep analysis.
+Install the peer-ai skill in Claude Code, Codex CLI, and/or Antigravity CLI so
+any installed AI can ask any other installed AI for a second opinion, code
+review, or deep analysis.
 
 ${bold}USAGE${reset}
   npx @pilosite/peer-ai@latest [OPTIONS]               # install
@@ -1162,7 +1171,7 @@ ${bold}SCOPE${reset}
 ${bold}SOURCES${reset}
       --claude           Install peer-ai in Claude Code (must be detected)
       --codex            Install peer-ai in Codex CLI
-      --gemini           Install peer-ai in Gemini CLI
+      --antigravity      Install peer-ai in Antigravity CLI (agy) [alias: --gemini]
       --all              Install in all detected sources
 
 ${bold}CAP ENFORCEMENT${reset}
@@ -1210,9 +1219,9 @@ function printUsageHint(sources, maxRounds) {
     if (src === 'claude') {
       console.log(`  ${cyan}Claude Code:${reset}   /peer-ai codex review the last 2 commits`);
     } else if (src === 'codex') {
-      console.log(`  ${cyan}Codex:${reset}         (auto-invoked on phrases like "ask claude", "demande à gemini")`);
-    } else if (src === 'gemini') {
-      console.log(`  ${cyan}Gemini:${reset}        /peer-ai:codex review the architecture`);
+      console.log(`  ${cyan}Codex:${reset}         (auto-invoked on phrases like "ask claude", "demande à antigravity")`);
+    } else if (src === 'antigravity') {
+      console.log(`  ${cyan}Antigravity:${reset}   /peer-ai:codex review the architecture`);
       console.log(`                  /peer-ai:claude second opinion on this approach`);
       console.log(`                  /peer-ai:list`);
     }
